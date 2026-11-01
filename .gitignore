@@ -1,0 +1,20 @@
+# Python virtual environment (multi-GB torch/CUDA install, machine specific)
+venv/
+
+# Local MNIST dataset — the loader downloads it on demand, never commit it
+training/data/
+
+# Model weights saved by training/training.py
+training/weights/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+
+# Windows metadata files WSL creates for files copied from Windows
+*:Zone.Identifier
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

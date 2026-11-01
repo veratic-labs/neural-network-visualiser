@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Neural Network Training Visualiser</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="app-header">
+        <div class="brand">
+          <h1>Neural Network Training Visualiser</h1>
+          <p class="subtitle">
+            MNIST multilayer perceptron ·
+            <span id="architecture-summary">784 → 128 → 64 → 10</span> · batch size 1
+          </p>
+        </div>
+        <div class="badges">
+          <span class="badge badge-status" id="status-badge">Ready</span>
+          <span class="badge badge-mock">Milestone 1 · mock data</span>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel panel-network" aria-labelledby="network-heading">
+          <div class="panel-head">
+            <h2 id="network-heading">Network overview</h2>
+            <div class="segmented" role="group" aria-label="Connection display mode">
+              <button type="button" class="segment is-active" id="mode-all" aria-pressed="true">
+                All connections
+              </button>
+              <button type="button" class="segment" id="mode-partial" aria-pressed="false">
+                Partial (training)
+              </button>
+            </div>
+          </div>
+
+          <div class="canvas-wrap">
+            <canvas
+              id="network-canvas"
+              aria-label="Network diagram: 784 input neurons, hidden layers of 128 and 64 neurons, and 10 output neurons"
+            ></canvas>
+          </div>
+
+          <ul class="legend">
+            <li><span class="swatch swatch-positive" aria-hidden="true"></span>Positive weight</li>
+            <li><span class="swatch swatch-negative" aria-hidden="true"></span>Negative weight</li>
+            <li>
+              <span class="swatch swatch-neuron" aria-hidden="true"></span>Neuron
+              <span class="legend-aside">(activation colours arrive with live data)</span>
+            </li>
+          </ul>
+          <p class="hint" id="connection-note">Rendering…</p>
+        </section>
+
+        <aside class="side">
+          <section class="panel" aria-labelledby="sample-heading">
+            <div class="panel-head">
+              <h2 id="sample-heading">Current sample</h2>
+              <span class="tag tag-mock">mock</span>
+            </div>
+            <div class="sample-body">
+              <div class="sample-frame">
+                <canvas id="sample-canvas" width="28" height="28"></canvas>
+              </div>
+              <dl class="facts">
+                <div class="fact"><dt>True label</dt><dd id="sample-true">–</dd></div>
+                <div class="fact"><dt>Prediction</dt><dd id="sample-predicted">–</dd></div>
+                <div class="fact"><dt>Result</dt><dd><span class="pill" id="sample-verdict">–</span></dd></div>
+              </dl>
+            </div>
+            <p class="hint">
+              Prediction is the forward pass <strong>before</strong> the optimiser update.
+            </p>
+          </section>
+
+          <section class="panel" aria-labelledby="outputs-heading">
+            <div class="panel-head">
+              <h2 id="outputs-heading">Class probabilities</h2>
+              <span class="tag tag-mock">mock</span>
+            </div>
+            <div class="output-list" id="output-list"></div>
+            <p class="hint">Filled bar = predicted class · outlined label = true class.</p>
+          </section>
+
+          <section class="panel" aria-labelledby="metrics-heading">
+            <div class="panel-head">
+              <h2 id="metrics-heading">Training metrics</h2>
+              <span class="tag tag-mock">mock</span>
+            </div>
+            <dl class="metrics">
+              <div class="metric"><dt>Loss</dt><dd id="metric-loss">–</dd></div>
+              <div class="metric"><dt>Epoch</dt><dd id="metric-epoch">–</dd></div>
+              <div class="metric"><dt>Step</dt><dd id="metric-step">–</dd></div>
+            </dl>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="footer">
+        <div class="controls" role="group" aria-label="Training controls (not available yet)">
+          <button type="button" class="btn btn-primary" id="btn-start" disabled>Start</button>
+          <button type="button" class="btn" id="btn-pause" disabled>Pause</button>
+          <button type="button" class="btn" id="btn-reset" disabled>Stop / Reset</button>
+          <label class="speed">
+            <span>Speed</span>
+            <select id="speed-select" disabled>
+              <option value="slow">Slow (observe)</option>
+              <option value="normal" selected>Normal</option>
+              <option value="fast">Fast</option>
+            </select>
+          </label>
+          <span class="controls-note">
+            Controls are placeholders until the backend is connected (Milestone 4).
+          </span>
+        </div>
+
+        <div class="progress">
+          <div class="progress-head">
+            <span id="progress-text">0 / 60,000 steps</span>
+            <span id="progress-percent">0.0%</span>
+          </div>
+          <div
+            class="progress-track"
+            id="progress-bar"
+            role="progressbar"
+            aria-label="Training progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+        </div>
+
+        <p class="app-note">
+          Static preview (Milestone 1): the weights, sample image, prediction, loss and progress are
+          generated in the browser and are <strong>not</strong> real training data. No backend or
+          WebSocket is connected yet.
+        </p>
+      </footer>
+    </div>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
