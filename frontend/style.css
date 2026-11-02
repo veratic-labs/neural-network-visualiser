@@ -195,6 +195,12 @@ strong {
   color: #fdd67f;
 }
 
+/* Live data from the backend (real sample, softmax, inference loss). */
+.tag-live {
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  color: #8ff0c8;
+}
+
 .hint {
   margin: 0;
   color: var(--muted);
@@ -301,7 +307,7 @@ strong {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: rgba(203, 213, 225, 0.85);
+  background: radial-gradient(circle, rgba(94, 234, 212, 1), rgba(94, 234, 212, 0.2));
 }
 
 /* ---------- Current sample panel ------------------------------------------ */
@@ -497,6 +503,13 @@ strong {
   border-color: rgba(90, 169, 255, 0.6);
   background: linear-gradient(180deg, rgba(90, 169, 255, 0.35), rgba(90, 169, 255, 0.16));
   color: #dcecff;
+}
+
+/* Compact action button used inside a panel head (Next sample). */
+.btn-small {
+  padding: 5px 11px;
+  border-radius: 8px;
+  font-size: 12px;
 }
 
 .btn:disabled,

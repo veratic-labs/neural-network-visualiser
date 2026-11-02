@@ -1,4 +1,4 @@
-"""FastAPI backend for the visualiser: serves the frontend and the model.
+"""FastAPI backend for the visualiser: serves the frontend, the model and samples.
 
 Start it from the repository root:
 
@@ -6,13 +6,16 @@ Start it from the repository root:
 
 then open http://localhost:8000.
 
-Milestone 2 scope: on every WebSocket connection the server sends the existing
-PyTorch model once as a `model_info` message and then keeps the connection
-open. Nothing is trained, so no weights change and no further messages follow.
+Milestone 3 scope: on every WebSocket connection the server sends the existing
+PyTorch model once as a `model_info` message, followed by an `inference` message
+with one real MNIST sample, its softmax probabilities and the activations of
+every layer. The client asks for another sample with `{"type": "next_sample"}`.
+Only forward passes run, so no weight ever changes.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -21,7 +24,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
-from .visualiser import build_model_info, load_training_module, summarise
+from .visualiser import build_inference, build_model_info, load_training_module, summarise
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -42,9 +45,10 @@ app = FastAPI(title="Neural Network Training Visualiser")
 
 @app.websocket("/ws")
 async def model_socket(websocket: WebSocket) -> None:
-    """Send the real model to a new client, then keep the socket open."""
+    """Send the real model plus one real sample, then answer `next_sample`."""
     await websocket.accept()
     logger.info("client connected: %s", websocket.client)
+    sample_index = 0
 
     try:
         await websocket.send_json(MODEL_INFO)
@@ -55,16 +59,39 @@ async def model_socket(websocket: WebSocket) -> None:
             MODEL_INFO["totals"]["connections"],
         )
 
-        # Milestone 2 has no client-to-server commands; reading until the
-        # disconnect keeps the channel open for the training milestones.
+        # The page opens with a real sample rather than a placeholder.
+        await send_sample(websocket, sample_index)
+
         while True:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 break
+
+            command = json.loads(message.get("text") or "{}")
+            if command.get("type") == "next_sample":
+                sample_index += 1
+                await send_sample(websocket, sample_index)
+            else:
+                logger.warning("ignoring client message: %s", command.get("type"))
     except WebSocketDisconnect:
         pass
     finally:
         logger.info("client disconnected: %s", websocket.client)
+
+
+async def send_sample(websocket: WebSocket, index: int) -> None:
+    """Run one forward pass through the existing model and send the result."""
+    payload = build_inference(TRAINING_MODULE, index)
+    await websocket.send_json(payload)
+    logger.info(
+        "sent inference for sample %d/%d (true %d, predicted %d, loss %.4f, weights %s)",
+        payload["sample"]["index"] + 1,
+        payload["sample"]["total"],
+        payload["true_label"],
+        payload["predicted_label"],
+        payload["loss"],
+        payload["weights_checksum"][:16],
+    )
 
 
 # Mounted last so the WebSocket route above keeps precedence. html=True serves

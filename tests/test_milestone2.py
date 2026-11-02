@@ -8,7 +8,11 @@ Checks, in order:
   1. the backend payload matches the existing PyTorch model exactly
   2. the FastAPI server serves the frontend and answers on /ws
   3. a WebSocket client receives the same real weights and biases
-  4. the frontend no longer generates mock connection weights
+  4. the frontend draws backend weights instead of generated mock weights
+
+Since Milestone 3 the server also sends one real `inference` sample straight
+after `model_info`, so the last socket checks assert that the extra message is
+that sample and that it leaves the weights untouched — not that nothing follows.
 
 The script starts its own server on port 8123 and shuts it down afterwards.
 """
@@ -182,7 +186,6 @@ def check_http() -> None:
         ("/style.css", "css"),
         ("/main.js", "javascript"),
         ("/network.js", "javascript"),
-        ("/mock.js", "javascript"),
     ):
         status, content_type, _ = fetch(path)
         check(
@@ -256,23 +259,31 @@ def check_websocket(expected_info: dict, layers: list) -> None:
         "a second connection receives the same weights (no training between)",
     )
 
+    # Milestone 3 added one real sample right after the model; it must not be a
+    # training step and it must leave the weights exactly as they were.
+    sample = json.loads(extra) if extra else None
     check(
-        extra is None,
-        "socket stays open without further messages (nothing is training)",
+        isinstance(sample, dict) and sample.get("type") == "inference",
+        "the message after model_info is a real inference sample, not a training step",
         repr(extra)[:100],
+    )
+    check(
+        isinstance(sample, dict)
+        and sample.get("weights_checksum") == message["weights_checksum"],
+        "the inference sample leaves every weight unchanged",
+        f"{(sample or {}).get('weights_checksum', '')[:16]} != {message['weights_checksum'][:16]}",
     )
 
 
 def check_frontend_sources() -> None:
     """Part 4: the frontend draws backend weights, not mock weights."""
     main_js = (REPO_ROOT / "frontend" / "main.js").read_text()
-    mock_js = (REPO_ROOT / "frontend" / "mock.js").read_text()
     html = (REPO_ROOT / "frontend" / "index.html").read_text()
 
-    check("createMockWeights" not in mock_js, "mock.js no longer generates weights")
     check(
-        "weights" not in mock_js.split("export function createMockState")[1].lower(),
-        "mock.js exports no weight data",
+        not (REPO_ROOT / "frontend" / "mock.js").exists()
+        and "mock.js" not in main_js,
+        "the frontend no longer loads placeholder mock data",
     )
     check("new WebSocket" in main_js, "main.js opens the WebSocket")
     check("decodeFloat32" in main_js, "main.js decodes the base64 float32 weights")

@@ -13,8 +13,9 @@
  * canvas size change.
  *
  * This module only renders the data it is handed. It has no knowledge of where
- * that data comes from: `main.js` receives the real weights from the FastAPI
- * backend over a WebSocket and hands them over with `setModel()`.
+ * that data comes from: `main.js` receives the real weights and the real
+ * per-layer activations from the FastAPI backend over a WebSocket and hands
+ * them over with `setModel()` and `setActivations()`.
  */
 
 export const ARCHITECTURE = [
@@ -28,9 +29,11 @@ export const ARCHITECTURE = [
 export const PARTIAL_TOP_K = 5;
 
 // Positive and negative weights use two contrasting hues; alpha and line width
-// carry the magnitude. Neuron fill is deliberately a separate encoding.
+// carry the magnitude. Neuron fill is deliberately a separate encoding: teal,
+// brighter for a stronger activation, never the sign of a weight.
 const POSITIVE_COLOUR = { r: 90, g: 169, b: 255 };
 const NEGATIVE_COLOUR = { r: 255, g: 122, b: 69 };
+const ACTIVATION_COLOUR = { r: 94, g: 234, b: 212 };
 
 const INTENSITY_BINS = 8;
 const ALPHA_MIN = 0.04;
@@ -104,6 +107,8 @@ export class NetworkView {
     this.weights = [];
     this.selection = [];
     this.layerMaxAbs = [];
+    this.activations = [];
+    this.activationMax = [];
     this.totalConnections = countConnections(architecture);
 
     this.layout = [];
@@ -158,6 +163,20 @@ export class NetworkView {
       if (this.width > 0 && this.height > 0) this.computeLayout();
     }
     this.setWeights(weights);
+  }
+
+  /**
+   * One activation array per layer, in layer order: the normalised pixels, the
+   * ReLU outputs of the hidden layers and the output probabilities. Neuron fill
+   * brightness shows activation while line colour keeps showing weight sign.
+   * @param {Float32Array[]} activations
+   */
+  setActivations(activations) {
+    this.activations = activations || [];
+    this.activationMax = this.activations.map((values) => maxAbs(values));
+    // Neurons are painted on top of the cached connections, so the expensive
+    // full-network bitmap stays valid and only this cheap overlay is redrawn.
+    this.render();
   }
 
   /** @param {"full" | "partial"} mode */
@@ -230,18 +249,21 @@ export class NetworkView {
       if (!this.cacheValid) {
         this.cacheCtx.clearRect(0, 0, this.width, this.height);
         this.fullDrawMs = this.drawConnectionsFull(this.cacheCtx);
-        this.drawNeurons(this.cacheCtx);
-        this.drawLayerCaptions(this.cacheCtx);
         this.cacheValid = true;
       } else {
         cached = true;
       }
 
-      // Blit the cached bitmap 1:1 in device pixels, then restore the CSS scale.
+      // Blit the cached connection bitmap 1:1 in device pixels, restore the CSS
+      // scale, then draw the (changeable) neurons and captions on top. Only the
+      // 109k connections are cached; activations can update without redrawing
+      // them.
       this.ctx.setTransform(1, 0, 0, 1, 0, 0);
       this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.drawImage(this.cache, 0, 0);
       this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      this.drawNeurons(this.ctx);
+      this.drawLayerCaptions(this.ctx);
       milliseconds = this.fullDrawMs;
     } else {
       this.ctx.clearRect(0, 0, this.width, this.height);
@@ -344,13 +366,28 @@ export class NetworkView {
   }
 
   drawNeurons(ctx) {
-    ctx.fillStyle = "rgba(203, 213, 225, 0.85)";
+    // Neutral slate dot keeps the layer structure visible; the activation tint
+    // is painted on top, so an inactive neuron is simply not tinted.
     for (let layer = 0; layer < this.architecture.length; layer += 1) {
       const { x, ys, step, size } = this.layout[layer];
       const radius = Math.max(0.7, Math.min(5, step * 0.34));
+      const values = this.activations[layer];
+      const scaled = values && values.length === size ? values : null;
+      const scale = this.activationMax[layer] > 0 ? 1 / this.activationMax[layer] : 0;
+
       for (let i = 0; i < size; i += 1) {
         ctx.beginPath();
         ctx.arc(x, ys[i], radius, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(203, 213, 225, 0.85)";
+        ctx.fill();
+
+        if (!scaled) continue;
+        const magnitude = Math.min(1, Math.abs(scaled[i]) * scale);
+        if (magnitude <= 0.02) continue;
+
+        ctx.beginPath();
+        ctx.arc(x, ys[i], radius, 0, Math.PI * 2);
+        ctx.fillStyle = toRgba(ACTIVATION_COLOUR, 0.12 + 0.88 * Math.pow(magnitude, 0.6));
         ctx.fill();
       }
     }

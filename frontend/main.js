@@ -1,23 +1,25 @@
 /**
  * main.js — Page state, WebSocket client, panel rendering and UI wiring.
  *
- * The network weights come from the backend: when the page connects, the server
- * sends the real PyTorch model as a `model_info` message and network.js draws
- * exactly those values. No training runs yet, so the weights stay at the
- * model's initial values and no further messages follow. network.js keeps
- * handling all canvas drawing.
+ * Every number on the page comes from the backend. When the page connects, the
+ * server sends the real PyTorch model as a `model_info` message, followed by an
+ * `inference` message for one real MNIST sample: its 28 x 28 pixels, the true
+ * label, the forward pass logits and softmax probabilities, the activations of
+ * every layer and the cross-entropy loss of that sample. "Next sample" sends
+ * `{"type": "next_sample"}` and the server answers with the next sample.
  *
- * The sample image, prediction, loss and progress panels are still local
- * placeholders from ./mock.js and are labelled "mock" in the UI.
+ * Only forward passes run on the server, so the weights (and their colours)
+ * never change. network.js keeps handling all canvas drawing.
  */
 
 import { ARCHITECTURE, NetworkView, PARTIAL_TOP_K, countConnections } from "./network.js";
-import { createMockState } from "./mock.js";
 
 /** WebSocket endpoint exposed by backend/server.py. */
 const SOCKET_PATH = "/ws";
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_ATTEMPTS = 5;
+/** Re-enable the button if the backend never answers a next_sample request. */
+const NEXT_SAMPLE_TIMEOUT_MS = 5000;
 
 const elements = {
   architectureSummary: document.getElementById("architecture-summary"),
@@ -29,9 +31,11 @@ const elements = {
   modeAll: document.getElementById("mode-all"),
   modePartial: document.getElementById("mode-partial"),
   sampleCanvas: document.getElementById("sample-canvas"),
+  sampleIndex: document.getElementById("sample-index"),
   sampleTrue: document.getElementById("sample-true"),
   samplePredicted: document.getElementById("sample-predicted"),
   sampleVerdict: document.getElementById("sample-verdict"),
+  nextSample: document.getElementById("btn-next-sample"),
   outputList: document.getElementById("output-list"),
   metricLoss: document.getElementById("metric-loss"),
   metricEpoch: document.getElementById("metric-epoch"),
@@ -42,10 +46,12 @@ const elements = {
   progressPercent: document.getElementById("progress-percent"),
 };
 
-const mock = createMockState();
-
 /** The `model_info` payload from the backend, or null until it arrives. */
 let model = null;
+/** Output bar elements, built once and then updated in place. */
+let outputRows = [];
+/** Timer that re-enables the Next sample button if a reply never arrives. */
+let nextSampleTimeout = 0;
 
 // The view starts without weights: neurons and captions render immediately and
 // the 109,184 connections appear as soon as the model arrives.
@@ -63,9 +69,9 @@ function setStatus(text, tone) {
 }
 
 /**
- * Decodes the backend's base64 payload into float32 values. The server sends
- * raw little-endian bytes in row-major [out][in] order — the same layout as
- * `layer.weight` in PyTorch — so this is a straight copy into a Float32Array.
+ * Decodes the backend's base64 weight/activation payload into float32 values.
+ * The server sends raw little-endian bytes in row-major order — the same layout
+ * PyTorch uses — so this is a straight copy into a Float32Array.
  */
 function decodeFloat32(base64) {
   const binary = window.atob(base64);
@@ -74,6 +80,22 @@ function decodeFloat32(base64) {
     bytes[i] = binary.charCodeAt(i);
   }
   return new Float32Array(bytes.buffer);
+}
+
+/**
+ * Decodes one base64 byte payload — the 28 x 28 sample image — into values in
+ * 0..1, the same range `torchvision.transforms.ToTensor()` produces.
+ */
+function decodePixels(base64, expectedLength) {
+  const binary = window.atob(base64);
+  if (expectedLength && binary.length !== expectedLength) {
+    throw new Error(`expected ${expectedLength} pixels, got ${binary.length}`);
+  }
+  const pixels = new Float32Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    pixels[i] = binary.charCodeAt(i) / 255;
+  }
+  return pixels;
 }
 
 /** Renders the real model the backend just sent. */
@@ -103,10 +125,73 @@ function handleModelInfo(message) {
     message.weights_state === "trained" ? "Real weights" : "Real weights · untrained";
   setStatus("Ready", "ready");
 
+  // Nothing has trained yet, so the progress bar reports zero real steps.
+  if (message.total_steps) renderProgress(0, message.total_steps);
+
   console.info(
     `model_info: ${architecture.map((layer) => layer.size).join("→")}, ` +
       `${formatNumber(connectionCount)} weights, sha256 ${String(message.weights_checksum).slice(0, 16)} ` +
       `from ${message.weights_source} (${message.weights_state})`,
+  );
+}
+
+/**
+ * Renders one real inference snapshot: sample image, labels, softmax
+ * probabilities, loss and the per-layer activations on the network canvas.
+ */
+function handleInference(message) {
+  const sample = message.sample || {};
+  const width = sample.width || 28;
+  const height = sample.height || 28;
+
+  let image;
+  let probabilities;
+  let activations;
+  try {
+    image = { width, height, pixels: decodePixels(sample.pixels, width * height) };
+    probabilities = decodeFloat32(message.probabilities);
+    activations = (message.activations || []).map(decodeFloat32);
+  } catch (error) {
+    console.error("could not read the inference message", error, message);
+    setStatus("Sample data invalid", "error");
+    return;
+  }
+
+  // A forward pass must never move a weight; the checksum proves it.
+  if (model && message.weights_checksum !== model.weights_checksum) {
+    console.error(
+      "weights changed between model_info and an inference sample",
+      message.weights_checksum,
+      model.weights_checksum,
+    );
+    setStatus("Weights changed", "error");
+  }
+
+  drawSampleImage(elements.sampleCanvas, image);
+
+  const correct = message.predicted_label === message.true_label;
+  elements.sampleIndex.textContent = `${formatNumber(sample.index + 1)} / ${formatNumber(sample.total)}`;
+  elements.sampleTrue.textContent = String(message.true_label);
+  elements.samplePredicted.textContent = String(message.predicted_label);
+  elements.sampleVerdict.textContent = correct ? "Correct" : "Incorrect";
+  elements.sampleVerdict.className = `pill ${correct ? "pill-ok" : "pill-bad"}`;
+
+  updateOutputRows(outputRows, {
+    probabilities,
+    trueLabel: message.true_label,
+    predictedLabel: message.predicted_label,
+  });
+
+  elements.metricLoss.textContent = Number(message.loss).toFixed(4);
+  view.setActivations(activations);
+
+  window.clearTimeout(nextSampleTimeout);
+  elements.nextSample.disabled = false;
+
+  console.info(
+    `inference: sample ${sample.index + 1}/${sample.total}, true ${message.true_label}, ` +
+      `predicted ${message.predicted_label}, loss ${Number(message.loss).toFixed(4)}, ` +
+      `activations ${activations.map((values) => values.length).join("/")}`,
   );
 }
 
@@ -149,6 +234,7 @@ function connectSocket() {
       return;
     }
     if (message.type === "model_info") handleModelInfo(message);
+    else if (message.type === "inference") handleInference(message);
   });
 
   socket.addEventListener("close", () => {
@@ -252,19 +338,35 @@ function updateOutputRows(rows, state) {
   });
 }
 
-function renderMetrics() {
-  const { loss, epoch, step, totalSteps } = mock;
-  const percent = totalSteps > 0 ? (step / totalSteps) * 100 : 0;
+/**
+ * Training progress is Milestone 4, so the bar honestly reports zero completed
+ * steps for now instead of showing placeholder values.
+ */
+function renderProgress(completed, total) {
+  const percent = total > 0 ? (completed / total) * 100 : 0;
 
-  elements.metricLoss.textContent = loss.toFixed(4);
-  elements.metricEpoch.textContent = String(epoch);
-  elements.metricStep.textContent = `${formatNumber(step)} / ${formatNumber(totalSteps)}`;
+  elements.metricEpoch.textContent = String(Math.floor(completed / (total || 1)));
+  elements.metricStep.textContent = `${formatNumber(completed)} / ${formatNumber(total)}`;
 
   elements.progressFill.style.width = `${percent.toFixed(2)}%`;
   elements.progressText.textContent =
-    `${formatNumber(step)} / ${formatNumber(totalSteps)} steps · epoch ${epoch}`;
+    `${formatNumber(completed)} / ${formatNumber(total)} steps · training not started`;
   elements.progressPercent.textContent = `${percent.toFixed(1)}%`;
   elements.progressBar.setAttribute("aria-valuenow", percent.toFixed(1));
+}
+
+/** Asks the backend for the next MNIST sample's forward pass. */
+function requestNextSample() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+  elements.nextSample.disabled = true;
+  socket.send(JSON.stringify({ type: "next_sample" }));
+
+  // Never leave the button stuck if the reply is lost.
+  window.clearTimeout(nextSampleTimeout);
+  nextSampleTimeout = window.setTimeout(() => {
+    elements.nextSample.disabled = false;
+  }, NEXT_SAMPLE_TIMEOUT_MS);
 }
 
 function init() {
@@ -273,23 +375,24 @@ function init() {
   view.onRender = updateConnectionNote;
   view.render();
 
-  drawSampleImage(elements.sampleCanvas, mock.image);
-  elements.sampleTrue.textContent = String(mock.trueLabel);
-  elements.samplePredicted.textContent = String(mock.predictedLabel);
-  const correct = mock.trueLabel === mock.predictedLabel;
-  elements.sampleVerdict.textContent = correct ? "Correct" : "Incorrect";
-  elements.sampleVerdict.className = `pill ${correct ? "pill-ok" : "pill-bad"}`;
+  // Empty panels until the first real sample arrives.
+  outputRows = buildOutputRows(elements.outputList, ARCHITECTURE[ARCHITECTURE.length - 1].size);
+  updateOutputRows(outputRows, { probabilities: [], trueLabel: -1, predictedLabel: -1 });
+  elements.metricLoss.textContent = "–";
+  elements.metricEpoch.textContent = "–";
+  elements.metricStep.textContent = "–";
+  elements.progressText.textContent = "Waiting for the model…";
+  elements.progressPercent.textContent = "0.0%";
+  elements.nextSample.disabled = true;
 
-  updateOutputRows(buildOutputRows(elements.outputList, mock.probabilities.length), mock);
-  renderMetrics();
-
-  // Ask the backend for the real model. Until it answers, only the neurons are
-  // drawn and the status badge stays on "Connecting…".
+  // Ask the backend for the real model and the first real sample. Until it
+  // answers, only the neurons are drawn and the badge stays on "Connecting…".
   connectSocket();
 }
 
 elements.modeAll.addEventListener("click", () => setMode("full"));
 elements.modePartial.addEventListener("click", () => setMode("partial"));
+elements.nextSample.addEventListener("click", requestNextSample);
 
 init();
 

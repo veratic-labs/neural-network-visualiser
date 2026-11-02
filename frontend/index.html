@@ -48,8 +48,8 @@
             <li><span class="swatch swatch-positive" aria-hidden="true"></span>Positive weight</li>
             <li><span class="swatch swatch-negative" aria-hidden="true"></span>Negative weight</li>
             <li>
-              <span class="swatch swatch-neuron" aria-hidden="true"></span>Neuron
-              <span class="legend-aside">(activation colours arrive with live data)</span>
+              <span class="swatch swatch-neuron" aria-hidden="true"></span>Neuron activation
+              <span class="legend-aside">(brighter = stronger)</span>
             </li>
           </ul>
           <p class="hint" id="connection-note">Waiting for the backend to send the model…</p>
@@ -59,27 +59,31 @@
           <section class="panel" aria-labelledby="sample-heading">
             <div class="panel-head">
               <h2 id="sample-heading">Current sample</h2>
-              <span class="tag tag-mock">mock</span>
+              <button type="button" class="btn btn-small" id="btn-next-sample" disabled>
+                Next sample
+              </button>
             </div>
             <div class="sample-body">
               <div class="sample-frame">
                 <canvas id="sample-canvas" width="28" height="28"></canvas>
               </div>
               <dl class="facts">
+                <div class="fact"><dt>Sample</dt><dd id="sample-index">–</dd></div>
                 <div class="fact"><dt>True label</dt><dd id="sample-true">–</dd></div>
                 <div class="fact"><dt>Prediction</dt><dd id="sample-predicted">–</dd></div>
                 <div class="fact"><dt>Result</dt><dd><span class="pill" id="sample-verdict">–</span></dd></div>
               </dl>
             </div>
             <p class="hint">
-              Prediction is the forward pass <strong>before</strong> the optimiser update.
+              A real MNIST training image. The prediction is the softmax of the forward pass; no
+              optimiser step is taken.
             </p>
           </section>
 
           <section class="panel" aria-labelledby="outputs-heading">
             <div class="panel-head">
               <h2 id="outputs-heading">Class probabilities</h2>
-              <span class="tag tag-mock">mock</span>
+              <span class="tag tag-live">softmax</span>
             </div>
             <div class="output-list" id="output-list"></div>
             <p class="hint">Filled bar = predicted class · outlined label = true class.</p>
@@ -88,13 +92,17 @@
           <section class="panel" aria-labelledby="metrics-heading">
             <div class="panel-head">
               <h2 id="metrics-heading">Training metrics</h2>
-              <span class="tag tag-mock">mock</span>
+              <span class="tag tag-live">inference</span>
             </div>
             <dl class="metrics">
               <div class="metric"><dt>Loss</dt><dd id="metric-loss">–</dd></div>
               <div class="metric"><dt>Epoch</dt><dd id="metric-epoch">–</dd></div>
               <div class="metric"><dt>Step</dt><dd id="metric-step">–</dd></div>
             </dl>
+            <p class="hint">
+              Loss is this sample's cross-entropy. Epoch and step stay at zero until training
+              starts (Milestone 4).
+            </p>
           </section>
         </aside>
       </main>
@@ -136,10 +144,11 @@
         </div>
 
         <p class="app-note">
-          The network overview shows the <strong>real weights</strong> of the existing PyTorch model
-          in <code>training/training.py</code>, sent once by the backend over a WebSocket. They are
-          the model's initial values: no training has run yet, so the colours never change. The
-          sample image, prediction, loss and progress bar are still placeholders until Milestone 3/4.
+          The diagram shows the <strong>real weights</strong> of the existing PyTorch model in
+          <code>training/training.py</code> and the <strong>real activations</strong> of one MNIST
+          sample from <code>training/data/</code>. Each sample is a forward pass only — no gradients
+          and no optimiser step — so the weight colours never change until training is added in
+          Milestone 4.
         </p>
       </footer>
     </div>

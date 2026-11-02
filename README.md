@@ -4,10 +4,16 @@ Real-time visualiser for the existing PyTorch MNIST MLP in `training/`
 (`784 → 128 → 64 → 10`, batch size 1). See `plan.md` for the full design and
 milestones.
 
-**Current state: Milestone 2 — the frontend draws the real, untrained PyTorch
-weights sent by the FastAPI backend over a WebSocket.** No training runs yet, so
-the weights never change; the sample image, prediction, loss and progress bar
-are still placeholders labelled "mock".
+**Current state: Milestone 3 — the page shows real inference data.** The FastAPI
+backend sends the real, untrained PyTorch weights plus one real MNIST training
+sample over a WebSocket: the 28 × 28 image, its true label, the forward-pass
+logits and softmax probabilities, the predicted digit, the cross-entropy loss of
+that sample, and the activations of every layer (drawn as teal neuron
+brightness). "Next sample" asks for the next image. No optimiser step ever runs,
+so the weights are unchanged and their colours never move.
+
+Training with live weight updates, the Start/Pause/Resume controls and the
+progress bar are still Milestone 4.
 
 ## Run the application
 
@@ -21,8 +27,10 @@ repository root, using the project virtualenv:
 Then open <http://localhost:8000>.
 
 The backend loads `training/training.py` (its network only — the training loop
-stays behind a `__main__` guard), sends the model to the browser on connect and
-serves `frontend/` as static files.
+stays behind a `__main__` guard), sends the model to the browser on connect,
+followed by one `inference` message per sample, and serves `frontend/` as static
+files. A forward pass runs inside `torch.no_grad()` and never touches the
+optimiser, so the weights cannot change.
 
 ### WSL2 + Windows browser
 
@@ -46,24 +54,29 @@ The page must be served over HTTP, not opened as a `file://` URL, because
 
 ```bash
 ./venv/bin/python tests/test_milestone2.py
+./venv/bin/python tests/test_milestone3.py
 ```
 
-The script starts its own server on port 8123, compares the transmitted weights
-with the PyTorch tensors, and shuts the server down again.
+Each script starts its own server (ports 8123 and 8124), verifies the messages
+the browser receives, and shuts the server down again. Milestone 2 checks that
+the transmitted weights are the model's real tensors. Milestone 3 checks that
+the sample is a real MNIST image, that the logits, softmax, prediction, loss and
+activations are reproducible from the transmitted weights and pixels, and that
+`next_sample` returns the next image without changing a single weight.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `frontend/index.html` | Page layout: network view, sample / probability / metric panels, controls, progress bar |
+| `frontend/index.html` | Page layout: network view, sample / probability / metric panels, Next sample button, controls, progress bar |
 | `frontend/style.css` | Styling and responsive layout |
-| `frontend/network.js` | Canvas renderer for neurons and connections (full and partial modes) |
+| `frontend/network.js` | Canvas renderer for neurons, connections (full and partial modes) and activations |
 | `frontend/main.js` | WebSocket client, panel rendering and UI wiring |
-| `frontend/mock.js` | Placeholder sample image, probabilities, loss and progress (no weights) |
-| `backend/server.py` | FastAPI app: `/ws` WebSocket plus static frontend |
-| `backend/visualiser.py` | Loads the existing PyTorch model and serialises it |
-| `tests/test_milestone2.py` | End-to-end check: model → payload → HTTP/WebSocket → frontend |
+| `backend/server.py` | FastAPI app: `/ws` WebSocket (`model_info`, `inference`, `next_sample`) plus static frontend |
+| `backend/visualiser.py` | Loads the existing PyTorch model, serialises it and runs one-sample forward passes |
+| `tests/test_milestone2.py` | Model → payload → HTTP/WebSocket → frontend checks |
+| `tests/test_milestone3.py` | Real sample, softmax, activations and `next_sample` checks |
 
-`training/` is the existing PyTorch implementation. The only change made for
-Milestone 2 is a `if __name__ == "__main__":` guard around its training loop so
-the network can be imported without starting training.
+`training/` is the existing PyTorch implementation. The only change made to it
+(for Milestone 2) is a `if __name__ == "__main__":` guard around its training
+loop so the network can be imported without starting training.

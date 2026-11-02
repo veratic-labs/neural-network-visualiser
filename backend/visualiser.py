@@ -8,6 +8,11 @@ importing the module defines the network without starting a training run.
 
 Milestone 2 sends this payload once per WebSocket connection and never runs an
 optimiser step, so the weights are the untrained ``nn.Linear`` values.
+
+Milestone 3 adds `build_inference()`: one real MNIST sample from the existing
+`train_data` dataset, pushed through the same forward pass `train()` uses, with
+softmax probabilities and per-layer activations. It runs under `torch.no_grad()`
+and never touches the optimiser, so the weights stay exactly as they were.
 """
 
 from __future__ import annotations
@@ -33,6 +38,10 @@ TRAINING_FILE = TRAINING_DIR / "training.py"
 DTYPE = "float32"
 BYTE_ORDER = "little-endian"
 SHAPE_ORDER = "row-major [out][in]"
+
+# Sample images travel as the original MNIST bytes, one byte per pixel.
+IMAGE_SIZE = 28
+PIXEL_ENCODING = "uint8-base64"
 
 
 def load_training_module() -> ModuleType:
@@ -90,6 +99,19 @@ def encode_tensor(tensor: torch.Tensor) -> str:
     return base64.b64encode(tensor_bytes(tensor)).decode("ascii")
 
 
+def weights_checksum(layers: list[nn.Linear]) -> str:
+    """sha256 over every weight and bias byte, in layer order.
+
+    Sent with `model_info` and with every inference snapshot, so the frontend
+    (and the tests) can prove that a forward pass never changed a parameter.
+    """
+    digest = hashlib.sha256()
+    for layer in layers:
+        digest.update(tensor_bytes(layer.weight))
+        digest.update(tensor_bytes(layer.bias))
+    return digest.hexdigest()
+
+
 def build_model_info(module: ModuleType) -> dict:
     """The `model_info` payload sent to every new WebSocket client."""
     layers = linear_layers(module)
@@ -98,15 +120,10 @@ def build_model_info(module: ModuleType) -> dict:
     encoded_layers = []
     connections = 0
     parameters = 0
-    # Fingerprint of the transmitted bytes, so the client side (and the test
-    # suite) can prove that what arrived is exactly what the server sent.
-    digest = hashlib.sha256()
 
     for index, layer in enumerate(layers):
         weight_bytes = tensor_bytes(layer.weight)
         bias_bytes = tensor_bytes(layer.bias)
-        digest.update(weight_bytes)
-        digest.update(bias_bytes)
 
         weight_count = layer.out_features * layer.in_features
         connections += weight_count
@@ -140,12 +157,109 @@ def build_model_info(module: ModuleType) -> dict:
         "dtype": DTYPE,
         "byte_order": BYTE_ORDER,
         "shape_order": SHAPE_ORDER,
-        "weights_checksum": digest.hexdigest(),
+        "weights_checksum": weights_checksum(layers),
         "weights_source": str(TRAINING_FILE.relative_to(REPO_ROOT)),
         "weights_state": "untrained",
         "message": (
             "Initial weights of the existing PyTorch model; no training steps "
             "have been run yet."
+        ),
+    }
+
+
+def sample_dataset(module: ModuleType) -> object:
+    """The MNIST training split that training/load_data.py already loads."""
+    dataset = getattr(module, "train_data", None)
+    if dataset is None:
+        raise RuntimeError(f"{TRAINING_FILE} does not expose train_data")
+    return dataset
+
+
+def encode_pixels(image: torch.Tensor) -> str:
+    """A 28 x 28 ``ToTensor()`` image in 0..1 as base64-encoded uint8 bytes.
+
+    ``ToTensor()`` divides the MNIST bytes by 255, so multiplying back and
+    rounding restores exactly the pixels stored in the dataset file.
+    """
+    values = image.detach().cpu().numpy().reshape(-1) * 255.0
+    array = np.ascontiguousarray(np.rint(values).clip(0, 255), dtype=np.uint8)
+    return base64.b64encode(array.tobytes()).decode("ascii")
+
+
+def build_inference(module: ModuleType, index: int) -> dict:
+    """One real forward pass through the existing network — no training.
+
+    The computation is exactly the forward pass of ``train()`` in
+    training/training.py (``layer1`` -> relu -> ``layer2`` -> relu -> ``layer3``)
+    applied to one sample of the existing dataset, inside ``torch.no_grad()``
+    and without any optimiser call, so no parameter can change.
+    """
+    dataset = sample_dataset(module)
+    total = len(dataset)
+    if total == 0:
+        raise RuntimeError("the MNIST training split is empty")
+
+    sample_index = index % total
+    image, label = dataset[sample_index]
+    true_label = int(label)
+
+    layers = linear_layers(module)
+    if len(layers) != 3:
+        raise RuntimeError(
+            f"training/training.py is expected to chain 3 linear layers, found {len(layers)}"
+        )
+    layer1, layer2, layer3 = layers
+
+    with torch.no_grad():
+        # Same reshape as train(): batch size 1, flattened 28 x 28 image.
+        X = image.view(-1, 784)
+        A1 = torch.relu(layer1(X))
+        A2 = torch.relu(layer2(A1))
+        logits = layer3(A2)
+        probabilities = torch.softmax(logits, dim=1)
+        # The existing loss function from training.py, evaluated for this
+        # sample. No backward pass is run.
+        loss = module.loss_fn(logits, torch.tensor([true_label], dtype=torch.long))
+
+    predicted_label = int(torch.argmax(probabilities, dim=1))
+    width, height = image.shape[-1], image.shape[-2]
+
+    return {
+        "type": "inference",
+        "sample": {
+            "index": sample_index,
+            "total": total,
+            "width": width,
+            "height": height,
+            "pixels": encode_pixels(image),
+        },
+        "true_label": true_label,
+        "predicted_label": predicted_label,
+        "correct": predicted_label == true_label,
+        "logits": encode_tensor(logits.view(-1)),
+        "probabilities": encode_tensor(probabilities.view(-1)),
+        # One array per network layer, so the frontend can tint every neuron:
+        # normalised pixels, ReLU outputs of Hidden 1/2, softmax output.
+        "activations": [
+            encode_tensor(tensor.view(-1))
+            for tensor in (X, A1, A2, probabilities)
+        ],
+        "activations_note": (
+            "Input layer: normalised pixels; hidden layers: ReLU outputs; "
+            "output layer: softmax probabilities."
+        ),
+        "loss": float(loss),
+        "weights_checksum": weights_checksum(layers),
+        "weights_state": "untrained",
+        "encoding": {
+            "pixels": PIXEL_ENCODING,
+            "activations": DTYPE,
+            "byte_order": BYTE_ORDER,
+            "activations_shape_order": "row-major per layer, layer order",
+        },
+        "message": (
+            "Forward pass only: no gradients were computed and no optimiser "
+            "step was taken, so every weight is unchanged."
         ),
     }
 
