@@ -13,8 +13,8 @@
  * canvas size change.
  *
  * This module only renders the data it is handed. It has no knowledge of where
- * that data comes from — mock weights in Milestone 1, the real PyTorch model
- * over a WebSocket in a later milestone.
+ * that data comes from: `main.js` receives the real weights from the FastAPI
+ * backend over a WebSocket and hands them over with `setModel()`.
  */
 
 export const ARCHITECTURE = [
@@ -142,6 +142,22 @@ export class NetworkView {
     });
     this.cacheValid = false;
     this.render();
+  }
+
+  /**
+   * Replaces the layer sizes and the weights together, as sent by the backend's
+   * `model_info` message. Layer captions then show the sizes the model really
+   * has instead of the default ARCHITECTURE.
+   */
+  setModel({ architecture, weights }) {
+    if (architecture && architecture.length >= 2) {
+      this.architecture = architecture;
+      this.totalConnections = countConnections(architecture);
+      // resize() only recomputes the layout when the canvas changes size, so a
+      // new architecture has to redo it here.
+      if (this.width > 0 && this.height > 0) this.computeLayout();
+    }
+    this.setWeights(weights);
   }
 
   /** @param {"full" | "partial"} mode */

@@ -13,12 +13,13 @@
           <h1>Neural Network Training Visualiser</h1>
           <p class="subtitle">
             MNIST multilayer perceptron ·
-            <span id="architecture-summary">784 → 128 → 64 → 10</span> · batch size 1
+            <span id="architecture-summary">784 → 128 → 64 → 10</span> · batch size
+            <span id="batch-size">1</span>
           </p>
         </div>
         <div class="badges">
-          <span class="badge badge-status" id="status-badge">Ready</span>
-          <span class="badge badge-mock">Milestone 1 · mock data</span>
+          <span class="badge badge-status" id="status-badge">Connecting…</span>
+          <span class="badge badge-model" id="model-badge">Waiting for model</span>
         </div>
       </header>
 
@@ -51,7 +52,7 @@
               <span class="legend-aside">(activation colours arrive with live data)</span>
             </li>
           </ul>
-          <p class="hint" id="connection-note">Rendering…</p>
+          <p class="hint" id="connection-note">Waiting for the backend to send the model…</p>
         </section>
 
         <aside class="side">
@@ -112,7 +113,7 @@
             </select>
           </label>
           <span class="controls-note">
-            Controls are placeholders until the backend is connected (Milestone 4).
+            Controls are placeholders until the training loop is connected (Milestone 4).
           </span>
         </div>
 
@@ -135,9 +136,10 @@
         </div>
 
         <p class="app-note">
-          Static preview (Milestone 1): the weights, sample image, prediction, loss and progress are
-          generated in the browser and are <strong>not</strong> real training data. No backend or
-          WebSocket is connected yet.
+          The network overview shows the <strong>real weights</strong> of the existing PyTorch model
+          in <code>training/training.py</code>, sent once by the backend over a WebSocket. They are
+          the model's initial values: no training has run yet, so the colours never change. The
+          sample image, prediction, loss and progress bar are still placeholders until Milestone 3/4.
         </p>
       </footer>
     </div>

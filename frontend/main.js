@@ -1,19 +1,29 @@
 /**
- * main.js — Page state, panel rendering and UI wiring.
+ * main.js — Page state, WebSocket client, panel rendering and UI wiring.
  *
- * Milestone 1 only: every value comes from ./mock.js. There is no backend, no
- * WebSocket and no training yet, so the training controls and the speed
- * selector are rendered but disabled.
- *
- * In a later milestone this file gains the WebSocket client; network.js keeps
+ * The network weights come from the backend: when the page connects, the server
+ * sends the real PyTorch model as a `model_info` message and network.js draws
+ * exactly those values. No training runs yet, so the weights stay at the
+ * model's initial values and no further messages follow. network.js keeps
  * handling all canvas drawing.
+ *
+ * The sample image, prediction, loss and progress panels are still local
+ * placeholders from ./mock.js and are labelled "mock" in the UI.
  */
 
-import { ARCHITECTURE, NetworkView, PARTIAL_TOP_K } from "./network.js";
+import { ARCHITECTURE, NetworkView, PARTIAL_TOP_K, countConnections } from "./network.js";
 import { createMockState } from "./mock.js";
+
+/** WebSocket endpoint exposed by backend/server.py. */
+const SOCKET_PATH = "/ws";
+const RECONNECT_DELAY_MS = 3000;
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 const elements = {
   architectureSummary: document.getElementById("architecture-summary"),
+  batchSize: document.getElementById("batch-size"),
+  statusBadge: document.getElementById("status-badge"),
+  modelBadge: document.getElementById("model-badge"),
   networkCanvas: document.getElementById("network-canvas"),
   connectionNote: document.getElementById("connection-note"),
   modeAll: document.getElementById("mode-all"),
@@ -32,19 +42,133 @@ const elements = {
   progressPercent: document.getElementById("progress-percent"),
 };
 
-const mock = createMockState(ARCHITECTURE);
+const mock = createMockState();
 
-const view = new NetworkView(elements.networkCanvas, {
-  architecture: ARCHITECTURE,
-  weights: mock.weights,
-});
+/** The `model_info` payload from the backend, or null until it arrives. */
+let model = null;
+
+// The view starts without weights: neurons and captions render immediately and
+// the 109,184 connections appear as soon as the model arrives.
+const view = new NetworkView(elements.networkCanvas, { architecture: ARCHITECTURE });
 
 function formatNumber(value) {
   return value.toLocaleString("en-GB");
 }
 
+/** Updates the header status badge: connecting, ready or failed. */
+function setStatus(text, tone) {
+  elements.statusBadge.textContent = text;
+  elements.statusBadge.classList.toggle("is-ready", tone === "ready");
+  elements.statusBadge.classList.toggle("is-error", tone === "error");
+}
+
+/**
+ * Decodes the backend's base64 payload into float32 values. The server sends
+ * raw little-endian bytes in row-major [out][in] order — the same layout as
+ * `layer.weight` in PyTorch — so this is a straight copy into a Float32Array.
+ */
+function decodeFloat32(base64) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Float32Array(bytes.buffer);
+}
+
+/** Renders the real model the backend just sent. */
+function handleModelInfo(message) {
+  const layers = message.layers || [];
+  const architecture = message.architecture || [];
+  const weights = layers.map((layer) => decodeFloat32(layer.weights));
+
+  // Guard against a truncated or mismatched payload before drawing 109k lines.
+  const shapesMatch =
+    weights.length === architecture.length - 1 &&
+    weights.every((values, index) => values.length === layers[index].in * layers[index].out);
+  const connectionCount = weights.reduce((total, values) => total + values.length, 0);
+
+  if (!shapesMatch || connectionCount !== countConnections(architecture)) {
+    console.error("model_info does not match its own architecture", message);
+    setStatus("Model data invalid", "error");
+    return;
+  }
+
+  model = message;
+  view.setModel({ architecture, weights });
+
+  elements.architectureSummary.textContent = architecture.map((layer) => layer.size).join(" → ");
+  if (message.batch_size) elements.batchSize.textContent = String(message.batch_size);
+  elements.modelBadge.textContent =
+    message.weights_state === "trained" ? "Real weights" : "Real weights · untrained";
+  setStatus("Ready", "ready");
+
+  console.info(
+    `model_info: ${architecture.map((layer) => layer.size).join("→")}, ` +
+      `${formatNumber(connectionCount)} weights, sha256 ${String(message.weights_checksum).slice(0, 16)} ` +
+      `from ${message.weights_source} (${message.weights_state})`,
+  );
+}
+
+let socket = null;
+let reconnectAttempts = 0;
+
+function socketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}${SOCKET_PATH}`;
+}
+
+function scheduleReconnect() {
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    setStatus("Backend unavailable", "error");
+    elements.connectionNote.textContent =
+      "No backend connection. Start it with “python -m backend.server” in the project " +
+      "root, then reload this page.";
+    return;
+  }
+
+  reconnectAttempts += 1;
+  setStatus(`Reconnecting ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}…`);
+  window.setTimeout(connectSocket, RECONNECT_DELAY_MS);
+}
+
+function connectSocket() {
+  if (reconnectAttempts === 0) setStatus("Connecting…");
+  socket = new WebSocket(socketUrl());
+
+  socket.addEventListener("open", () => {
+    reconnectAttempts = 0;
+  });
+
+  socket.addEventListener("message", (event) => {
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch (error) {
+      console.error("could not read WebSocket message", error);
+      return;
+    }
+    if (message.type === "model_info") handleModelInfo(message);
+  });
+
+  socket.addEventListener("close", () => {
+    socket = null;
+    scheduleReconnect();
+  });
+
+  socket.addEventListener("error", () => {
+    console.warn("WebSocket error — is the backend running?");
+  });
+}
+
 /** Describes what the canvas is currently showing, including render timing. */
 function updateConnectionNote({ mode, connections, milliseconds, cached }) {
+  if (!model) {
+    elements.connectionNote.textContent =
+      "Waiting for the backend to send the model — there are no weights to draw yet.";
+    return;
+  }
+
   const total = formatNumber(view.totalConnections);
   const shown = formatNumber(connections);
   const ms = `${Math.round(milliseconds)} ms`;
@@ -52,12 +176,12 @@ function updateConnectionNote({ mode, connections, milliseconds, cached }) {
   if (mode === "partial") {
     elements.connectionNote.textContent =
       `Partial mode: the ${PARTIAL_TOP_K} strongest connections by |weight| into each neuron ` +
-      `(${shown} of ${total} lines, drawn in ${ms}). This is the reduced view planned for live training.`;
+      `(${shown} of ${total} real weights, drawn in ${ms}). This is the reduced view used during training.`;
     return;
   }
 
   elements.connectionNote.textContent =
-    `All connections: ${total} lines drawn in ${ms}${cached ? " and cached" : ""}. ` +
+    `All connections: ${total} real weights drawn in ${ms}${cached ? " and cached" : ""}. ` +
     `Switch to partial mode to preview the reduced training view.`;
 }
 
@@ -158,6 +282,10 @@ function init() {
 
   updateOutputRows(buildOutputRows(elements.outputList, mock.probabilities.length), mock);
   renderMetrics();
+
+  // Ask the backend for the real model. Until it answers, only the neurons are
+  // drawn and the status badge stays on "Connecting…".
+  connectSocket();
 }
 
 elements.modeAll.addEventListener("click", () => setMode("full"));

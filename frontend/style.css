@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Neural Network Training Visualiser — Milestone 1 (static UI, mock data)
+   Neural Network Training Visualiser — layout and dark theme
    ========================================================================== */
 
 :root {
@@ -110,6 +110,25 @@ strong {
   border-color: rgba(251, 191, 36, 0.4);
   background: rgba(251, 191, 36, 0.12);
   color: #fdd67f;
+}
+
+.badge-model {
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.12);
+  color: #86efac;
+}
+
+/* WebSocket state: connecting keeps the default blue, these override it. */
+.badge-status.is-ready {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.14);
+  color: #86efac;
+}
+
+.badge-status.is-error {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
 }
 
 /* ---------- Grid layout --------------------------------------------------- */
@@ -546,6 +565,14 @@ strong {
   color: var(--muted);
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+.app-note code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #dbe4f2;
+  font-size: 11px;
 }
 
 /* ---------- Responsive ---------------------------------------------------- */

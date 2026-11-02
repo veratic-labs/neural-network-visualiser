@@ -31,38 +31,46 @@ optimiser = torch.optim.Adam(
 )
 
 #training
-for batch, (images, labels) in enumerate(train_loader):
-    X = images.view(-1, 784)
+def train():
+    for batch, (images, labels) in enumerate(train_loader):
+        X = images.view(-1, 784)
 
-    #forward propagation
-    Z1 = layer1(X)
-    A1 = torch.relu(Z1)
+        #forward propagation
+        Z1 = layer1(X)
+        A1 = torch.relu(Z1)
 
-    Z2 = layer2(A1)
-    A2 = torch.relu(Z2)
+        Z2 = layer2(A1)
+        A2 = torch.relu(Z2)
 
-    Y = layer3(A2)
+        Y = layer3(A2)
 
-    #loss
-    loss = loss_fn(Y, labels)
+        #loss
+        loss = loss_fn(Y, labels)
     
-    #backward propagation
-    optimiser.zero_grad()
-    loss.backward()
+        #backward propagation
+        optimiser.zero_grad()
+        loss.backward()
 
-    optimiser.step()
+        optimiser.step()
 
-    #print progress
-    if (batch + 1) % 100 == 0:
-        trained = min((batch + 1) * batch_size, len(train_data))
+        #print progress
+        if (batch + 1) % 100 == 0:
+            trained = min((batch + 1) * batch_size, len(train_data))
 
-        print(f"Trained: {trained}/{len(train_data)}, Loss: {loss.item():.6f}")
+            print(f"Trained: {trained}/{len(train_data)}, Loss: {loss.item():.6f}")
 
-WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
-WEIGHTS_DIR.mkdir(exist_ok=True)
+    WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
+    WEIGHTS_DIR.mkdir(exist_ok=True)
 
-torch.save({ 
-    "layer1": layer1.state_dict(),
-    "layer2": layer2.state_dict(),
-    "layer3": layer3.state_dict()
-}, WEIGHTS_DIR / "mnist_mlp.pth")
+    torch.save({ 
+        "layer1": layer1.state_dict(),
+        "layer2": layer2.state_dict(),
+        "layer3": layer3.state_dict()
+    }, WEIGHTS_DIR / "mnist_mlp.pth")
+
+
+# Only start training when this file is run directly. The backend imports this
+# module to read the network above (layer1..layer3); importing it must never
+# start a training run.
+if __name__ == "__main__":
+    train()
