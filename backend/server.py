@@ -1,4 +1,4 @@
-"""FastAPI backend for the visualiser: serves the frontend, the model and samples.
+"""FastAPI backend for the visualiser: serves the frontend, the model and training.
 
 Start it from the repository root:
 
@@ -6,25 +6,45 @@ Start it from the repository root:
 
 then open http://localhost:8000.
 
-Milestone 3 scope: on every WebSocket connection the server sends the existing
-PyTorch model once as a `model_info` message, followed by an `inference` message
-with one real MNIST sample, its softmax probabilities and the activations of
-every layer. The client asks for another sample with `{"type": "next_sample"}`.
-Only forward passes run, so no weight ever changes.
+Every connection starts with `model_info` (the current weights plus the training
+status) and one real `inference` sample. The client then drives the run with:
+
+    {"type": "start"}            one real optimiser step after another
+    {"type": "pause"}            stop at the next step boundary, keep the weights
+    {"type": "reset"}            back to the initial weights, progress 0
+    {"type": "set_speed", "speed": "slow" | "normal" | "fast"}
+    {"type": "request_weights"}  every current weight, for the Full view
+    {"type": "next_sample"}      one forward pass, no optimiser step
+
+Training never starts on its own: nothing happens until a client sends `start`.
+The steps themselves come from ``train_step()`` in training/training.py and run
+on a single worker thread, so the event loop stays responsive and no two PyTorch
+computations ever overlap.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Callable
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
-from .visualiser import build_inference, build_model_info, load_training_module, summarise
+from .trainer import Outbox, TrainingSession
+from .visualiser import (
+    build_inference,
+    build_model_info,
+    build_weight_snapshot,
+    load_training_module,
+    summarise,
+)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -38,67 +58,131 @@ logger = logging.getLogger("visualiser")
 
 # The model is loaded once per process, before the first client connects.
 TRAINING_MODULE = load_training_module()
-MODEL_INFO = build_model_info(TRAINING_MODULE)
 
-app = FastAPI(title="Neural Network Training Visualiser")
+# Exactly one worker: a training step and a forward pass can never run at the
+# same time, and nothing PyTorch does can block the event loop.
+EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pytorch")
+TRAINING = TrainingSession(TRAINING_MODULE, EXECUTOR)
+
+
+async def in_executor(function: Callable[..., Any], *args: Any) -> Any:
+    """Run PyTorch work on the single worker thread."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(EXECUTOR, function, *args)
+
+
+def current_model_info() -> dict:
+    """`model_info` for a client connecting right now (weights + training state)."""
+    return build_model_info(TRAINING_MODULE, TRAINING.training_info(), TRAINING.selection)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    logger.info("loaded %s", summarise(current_model_info()))
+    yield
+    await TRAINING.shutdown()
+    EXECUTOR.shutdown(wait=True)
+
+
+app = FastAPI(title="Neural Network Training Visualiser", lifespan=lifespan)
 
 
 @app.websocket("/ws")
 async def model_socket(websocket: WebSocket) -> None:
-    """Send the real model plus one real sample, then answer `next_sample`."""
+    """Send the real model, then serve commands and training frames."""
     await websocket.accept()
     logger.info("client connected: %s", websocket.client)
+
+    outbox = Outbox()
     sample_index = 0
 
+    # `model_info` first: it carries the current weights and whether training is
+    # idle, running or paused, so a reloaded page shows the right controls and
+    # progress without asking for anything. The inference sample is queued before
+    # subscribing to training, so the first two messages keep that documented
+    # order even when the page is reloaded mid-run; a coalesced frame that
+    # happens to be missed meanwhile is replaced by the next one anyway.
+    outbox.put(current_model_info())
+    outbox.put(await in_executor(build_inference, TRAINING_MODULE, sample_index))
+    TRAINING.subscribe(outbox)
+
+    sender = asyncio.create_task(send_frames(websocket, outbox), name="ws-sender")
+
     try:
-        await websocket.send_json(MODEL_INFO)
-        logger.info(
-            "sent model_info to %s (%d layers, %d connections)",
-            websocket.client,
-            len(MODEL_INFO["layers"]),
-            MODEL_INFO["totals"]["connections"],
-        )
-
-        # The page opens with a real sample rather than a placeholder.
-        await send_sample(websocket, sample_index)
-
         while True:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 break
 
             command = json.loads(message.get("text") or "{}")
-            if command.get("type") == "next_sample":
+            kind = command.get("type")
+
+            if kind == "next_sample":
                 sample_index += 1
-                await send_sample(websocket, sample_index)
+                outbox.put(await in_executor(build_inference, TRAINING_MODULE, sample_index))
+            elif kind == "start":
+                await TRAINING.start()
+            elif kind == "pause":
+                await TRAINING.pause()
+            elif kind == "reset":
+                await TRAINING.reset()
+                await publish_weights()
+            elif kind == "set_speed":
+                try:
+                    await TRAINING.set_speed(str(command.get("speed")))
+                except ValueError as error:
+                    outbox.put({"type": "error", "message": str(error)})
+            elif kind == "request_weights":
+                outbox.put(await snapshot_weights())
             else:
-                logger.warning("ignoring client message: %s", command.get("type"))
+                logger.warning("ignoring client message: %s", kind)
     except WebSocketDisconnect:
         pass
     finally:
+        sender.cancel()
+        try:
+            await sender
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+        TRAINING.unsubscribe(outbox)
         logger.info("client disconnected: %s", websocket.client)
 
+        # Nobody is watching any more: stop at the next step boundary instead of
+        # training unseen to the end of the epoch.
+        if TRAINING.subscriber_count == 0:
+            await TRAINING.pause_for_disconnect()
 
-async def send_sample(websocket: WebSocket, index: int) -> None:
-    """Run one forward pass through the existing model and send the result."""
-    payload = build_inference(TRAINING_MODULE, index)
-    await websocket.send_json(payload)
-    logger.info(
-        "sent inference for sample %d/%d (true %d, predicted %d, loss %.4f, weights %s)",
-        payload["sample"]["index"] + 1,
-        payload["sample"]["total"],
-        payload["true_label"],
-        payload["predicted_label"],
-        payload["loss"],
-        payload["weights_checksum"][:16],
-    )
+
+async def send_frames(websocket: WebSocket, outbox: Outbox) -> None:
+    """Send this client everything its outbox holds, one payload at a time."""
+    try:
+        while True:
+            payload = await outbox.get()
+            if payload is None:
+                return
+            await websocket.send_json(payload)
+            # Training frames are far too frequent to log; the payloads that
+            # carry the model and its samples are logged after they are sent.
+            if payload.get("type") in ("model_info", "inference"):
+                logger.info("sent %s", payload["type"])
+    except (WebSocketDisconnect, RuntimeError):
+        # The socket closed under us; the connection handler does the cleanup.
+        return
+
+
+async def snapshot_weights() -> dict:
+    """Every current weight and bias, for the Full view."""
+    return await in_executor(build_weight_snapshot, TRAINING_MODULE, TRAINING.step)
+
+
+async def publish_weights() -> None:
+    """Broadcast a full weight snapshot (used after a reset)."""
+    await TRAINING.broadcast(await snapshot_weights())
 
 
 # Mounted last so the WebSocket route above keeps precedence. html=True serves
 # index.html for "/".
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
-
-logger.info("loaded %s", summarise(MODEL_INFO))
 
 
 def main() -> None:

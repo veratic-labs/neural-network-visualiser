@@ -13,6 +13,18 @@ Milestone 3 adds `build_inference()`: one real MNIST sample from the existing
 `train_data` dataset, pushed through the same forward pass `train()` uses, with
 softmax probabilities and per-layer activations. It runs under `torch.no_grad()`
 and never touches the optimiser, so the weights stay exactly as they were.
+
+Milestone 4 adds `build_training_step()`, which serialises one *real* completed
+optimiser step of ``train_step()`` in training/training.py. Everything that
+describes the sample — pixels, prediction, softmax probabilities, activations
+and loss — is read from the forward pass that produced that step's gradients,
+i.e. **before** the optimiser update. The weights it carries are read **after**
+``optimiser.step()``, so the colours the browser draws are the real post-update
+parameters. Only the connections the Partial view draws are sent;
+`select_partial_indices()` chooses them once from the model's initial weights and
+a live frame never changes that set, so the same lines stay on screen while only
+their values move. `build_weight_snapshot()` returns the full tensors when the
+Full view needs them.
 """
 
 from __future__ import annotations
@@ -42,6 +54,12 @@ SHAPE_ORDER = "row-major [out][in]"
 # Sample images travel as the original MNIST bytes, one byte per pixel.
 IMAGE_SIZE = 28
 PIXEL_ENCODING = "uint8-base64"
+
+# Mirrors PARTIAL_TOP_K in frontend/network.js: the reduced training view draws
+# this many incoming connections per neuron. `select_partial_indices()` picks
+# them once from the initial weights, so a live frame only has to carry those
+# weights instead of all 109,184 of them — but always the same ones.
+PARTIAL_TOP_K = 5
 
 
 def load_training_module() -> ModuleType:
@@ -112,41 +130,78 @@ def weights_checksum(layers: list[nn.Linear]) -> str:
     return digest.hexdigest()
 
 
-def build_model_info(module: ModuleType) -> dict:
-    """The `model_info` payload sent to every new WebSocket client."""
-    layers = linear_layers(module)
-    architecture = describe_architecture(layers)
-
+def encode_layer_weights(layers: list[nn.Linear]) -> list[dict]:
+    """Every weight and bias of every layer, as base64 float32."""
     encoded_layers = []
-    connections = 0
-    parameters = 0
-
     for index, layer in enumerate(layers):
-        weight_bytes = tensor_bytes(layer.weight)
-        bias_bytes = tensor_bytes(layer.bias)
-
-        weight_count = layer.out_features * layer.in_features
-        connections += weight_count
-        parameters += weight_count + layer.out_features
         encoded_layers.append(
             {
                 "index": index,
                 "in": layer.in_features,
                 "out": layer.out_features,
-                "weights": base64.b64encode(weight_bytes).decode("ascii"),
-                "biases": base64.b64encode(bias_bytes).decode("ascii"),
-                "weight_count": weight_count,
+                "weights": encode_tensor(layer.weight),
+                "biases": encode_tensor(layer.bias),
+                "weight_count": layer.out_features * layer.in_features,
                 "bias_count": layer.out_features,
             }
         )
+    return encoded_layers
 
-    total_steps = len(module.train_data) if hasattr(module, "train_data") else None
+
+def build_model_info(
+    module: ModuleType,
+    training: dict | None = None,
+    selection: list[np.ndarray] | None = None,
+) -> dict:
+    """The `model_info` payload sent to every new WebSocket client.
+
+    `training` is the training session's current status, so a browser that
+    connects mid-run immediately knows whether to show Start, Pause or Resume.
+
+    `selection` is the session's fixed Partial-view selection. Sending it here
+    means the page and the server draw exactly the same connections for the whole
+    run, instead of the browser guessing at a rule from the weights of the moment.
+    Callers without a session get the selection derived from the current weights.
+    """
+    layers = linear_layers(module)
+    architecture = describe_architecture(layers)
+    if selection is None:
+        selection = select_partial_indices(module)
+
+    encoded_layers = encode_layer_weights(layers)
+    connections = sum(layer["weight_count"] for layer in encoded_layers)
+    parameters = connections + sum(layer["bias_count"] for layer in encoded_layers)
+
+    partial = [
+        {
+            "index": index,
+            "in": int(layer.in_features),
+            "out": int(layer.out_features),
+            "k": int(chosen.shape[1]),
+            "indices": encode_indices(chosen),
+            "visible_connections": int(chosen.size),
+        }
+        for index, (layer, chosen) in enumerate(zip(layers, selection))
+    ]
+
+    total_steps, epochs, train_size = training_totals(module)
     batch_size = getattr(module, "batch_size", None)
+    step = int(training["step"]) if training else 0
+    trained = step > 0
 
     return {
         "type": "model_info",
         "architecture": architecture,
         "layers": encoded_layers,
+        "partial": {
+            "top_k": PARTIAL_TOP_K,
+            "count": sum(layer["visible_connections"] for layer in partial),
+            "rule": (
+                f"the top {PARTIAL_TOP_K} incoming |weight| per neuron of the "
+                "initial model, fixed for the whole run"
+            ),
+            "selection": partial,
+        },
         "totals": {
             "neurons": sum(layer["size"] for layer in architecture),
             "connections": connections,
@@ -154,17 +209,90 @@ def build_model_info(module: ModuleType) -> dict:
         },
         "batch_size": batch_size,
         "total_steps": total_steps,
+        "epochs": epochs,
+        "train_size": train_size,
         "dtype": DTYPE,
         "byte_order": BYTE_ORDER,
         "shape_order": SHAPE_ORDER,
         "weights_checksum": weights_checksum(layers),
         "weights_source": str(TRAINING_FILE.relative_to(REPO_ROOT)),
-        "weights_state": "untrained",
+        "weights_state": "trained" if trained else "untrained",
+        "training": training,
         "message": (
-            "Initial weights of the existing PyTorch model; no training steps "
-            "have been run yet."
+            f"Weights after {step:,} optimiser step(s) of training/training.py."
+            if trained
+            else (
+                "Initial weights of the existing PyTorch model; no training steps "
+                "have been run yet."
+            )
         ),
     }
+
+
+def build_weight_snapshot(module: ModuleType, step: int = 0) -> dict:
+    """Every current weight and bias, for the Full view during/after training.
+
+    Since Milestone 4 the model really changes, so the Full view asks for this
+    snapshot when it is drawn instead of receiving all 109,184 weights with
+    every training step.
+    """
+    layers = linear_layers(module)
+    return {
+        "type": "weights",
+        "step": step,
+        "layers": encode_layer_weights(layers),
+        "dtype": DTYPE,
+        "byte_order": BYTE_ORDER,
+        "shape_order": SHAPE_ORDER,
+        "weights_checksum": weights_checksum(layers),
+        "weights_state": "trained" if step else "untrained",
+        "message": f"All current weights after {step:,} optimiser step(s).",
+    }
+
+
+def configured_epochs(module: ModuleType) -> int:
+    """How many passes over the training split training.py runs.
+
+    training.py has no epoch setting: ``train()`` makes exactly one pass over
+    ``train_loader``, so one epoch is the configured value.
+    """
+    return max(1, int(getattr(module, "epochs", 1)))
+
+
+def training_totals(module: ModuleType) -> tuple[int, int, int]:
+    """(total optimiser steps, epochs, training samples) for the real dataset.
+
+    ``batch_size`` is 1, so every optimiser step consumes exactly one MNIST
+    image and the total is the dataset length times the configured epochs.
+    """
+    train_size = len(sample_dataset(module))
+    if train_size == 0:
+        raise RuntimeError("the MNIST training split is empty")
+    epochs = configured_epochs(module)
+    return train_size * epochs, epochs, train_size
+
+
+def snapshot_parameters(module: ModuleType) -> list[dict]:
+    """Copies of every weight and bias, so a run can return to its start."""
+    return [
+        {name: value.detach().clone() for name, value in layer.state_dict().items()}
+        for layer in linear_layers(module)
+    ]
+
+
+def restore_parameters(module: ModuleType, snapshot: list[dict]) -> None:
+    """Puts the copied tensors back and forgets the optimiser's Adam state.
+
+    ``load_state_dict`` copies into the existing tensors, so the optimiser keeps
+    pointing at the same parameters while its moments are reset, exactly as a
+    freshly built model would be.
+    """
+    for layer, saved in zip(linear_layers(module), snapshot):
+        layer.load_state_dict({name: value.clone() for name, value in saved.items()})
+
+    optimiser = getattr(module, "optimiser", None)
+    if optimiser is not None:
+        optimiser.state.clear()
 
 
 def sample_dataset(module: ModuleType) -> object:
@@ -261,6 +389,173 @@ def build_inference(module: ModuleType, index: int) -> dict:
             "Forward pass only: no gradients were computed and no optimiser "
             "step was taken, so every weight is unchanged."
         ),
+    }
+
+
+def encode_indices(array: np.ndarray) -> str:
+    """Connection indices as base64 uint16 (every layer size fits in 16 bits)."""
+    return base64.b64encode(np.ascontiguousarray(array, dtype="<u2").tobytes()).decode("ascii")
+
+
+def select_partial_indices(module: ModuleType, k: int = PARTIAL_TOP_K) -> list[np.ndarray]:
+    """The Partial view's connections, chosen once from the model's weights.
+
+    One integer array of shape ``[out][k]`` per layer: for every neuron, the
+    ``k`` incoming connections with the largest |weight| at the moment this is
+    called (strongest first, ties broken by ascending input index, so the result
+    is deterministic). The training session calls it when the model is loaded and
+    again after a reset, which restores those same weights and therefore derives
+    the same indices.
+
+    Nothing recomputes the selection while training runs: the indices are fixed
+    for the whole run, so the browser keeps drawing the same 1,010 lines and only
+    their values change.
+    """
+    selection = []
+    for layer in linear_layers(module):
+        weights = layer.weight.detach().cpu().numpy()
+        limit = int(min(k, int(layer.in_features)))
+        order = np.argsort(-np.abs(weights), axis=1, kind="stable")[:, :limit]
+        selection.append(np.ascontiguousarray(order, dtype=np.int64))
+    return selection
+
+
+def visible_weight_layers(module: ModuleType, selection: list[np.ndarray]) -> list[dict]:
+    """The current weights of the connections the Partial view draws.
+
+    `selection` is what `select_partial_indices()` returned at load time. The
+    indices are never recomputed, so each frame describes exactly the same 1,010
+    connections; only the values read at those indices move during training. A
+    connection that was strong at load keeps being sent even after other weights
+    overtake it, which is what makes a fixed set of lines watchable.
+    """
+    layers = linear_layers(module)
+    if len(selection) != len(layers):
+        raise ValueError(
+            f"selection covers {len(selection)} layers, model has {len(layers)}"
+        )
+
+    encoded = []
+    for index, (layer, chosen) in enumerate(zip(layers, selection)):
+        weights = layer.weight.detach().cpu().numpy()
+        order = np.ascontiguousarray(chosen, dtype=np.int64)
+        out_size, in_size = weights.shape
+        if order.ndim != 2 or order.shape[0] != out_size:
+            raise ValueError(
+                f"layer {index}: selection {order.shape} does not match {weights.shape}"
+            )
+        if order.size and (int(order.min()) < 0 or int(order.max()) >= in_size):
+            raise ValueError(f"layer {index}: selection has an out-of-range input index")
+
+        values = np.take_along_axis(weights, order, axis=1)
+        encoded.append(
+            {
+                "index": index,
+                "in": int(in_size),
+                "out": int(out_size),
+                "k": int(order.shape[1]),
+                "indices": encode_indices(order),
+                "values": base64.b64encode(
+                    np.ascontiguousarray(values, dtype="<f4").tobytes()
+                ).decode("ascii"),
+                "visible_connections": int(order.size),
+            }
+        )
+    return encoded
+
+
+def build_training_step(
+    module: ModuleType,
+    result: dict,
+    *,
+    run: int,
+    step: int,
+    total_steps: int,
+    epochs: int,
+    train_size: int,
+    speed: str,
+    frame_every: int,
+    checksum_before: str | None,
+    selection: list[np.ndarray],
+) -> dict:
+    """One completed optimiser step of training/training.py, ready for the page.
+
+    `result` is what ``train_step()`` returned for this step. Its forward-pass
+    tensors were produced *before* ``optimiser.step()`` ran, so the pixels,
+    prediction, softmax probabilities, activations and loss in this payload all
+    describe the model as it was when the step was taken. The weights below are
+    read from the layers afterwards, i.e. the parameters the step produced.
+
+    `selection` is the session's fixed Partial-view selection, so every frame
+    carries the same 1,010 connections and only their values move.
+    """
+    layers = linear_layers(module)
+    X, A1, A2, Y = result["X"], result["A1"], result["A2"], result["Y"]
+    loss = result["loss"]
+    image = result["images"][0]
+    true_label = int(result["labels"][0])
+
+    with torch.no_grad():
+        probabilities = torch.softmax(Y, dim=1)
+        predicted_label = int(torch.argmax(probabilities, dim=1))
+
+    width, height = int(image.shape[-1]), int(image.shape[-2])
+
+    return {
+        "type": "training_step",
+        "run": run,
+        "step": step,
+        "total_steps": total_steps,
+        "epoch": min(epochs - 1, (step - 1) // train_size) if step > 0 else 0,
+        "epochs": epochs,
+        "speed": speed,
+        "frame_every": frame_every,
+        "sample": {
+            # Position of this image in the current pass over the shuffled
+            # DataLoader: one optimiser step trained exactly this one sample.
+            "position": (step - 1) % train_size + 1,
+            "total": train_size,
+            "width": width,
+            "height": height,
+            "pixels": encode_pixels(image),
+        },
+        "true_label": true_label,
+        "predicted_label": predicted_label,
+        "correct": predicted_label == true_label,
+        "logits": encode_tensor(Y.view(-1)),
+        "probabilities": encode_tensor(probabilities.view(-1)),
+        "activations": [
+            encode_tensor(tensor.view(-1)) for tensor in (X, A1, A2, probabilities)
+        ],
+        "activations_note": (
+            "Input layer: normalised pixels; hidden layers: ReLU outputs; "
+            "output layer: softmax probabilities — all read before the update."
+        ),
+        "loss": float(loss.detach()),
+        "capture": {
+            "image": "the MNIST sample this optimiser step trained",
+            "prediction": "before the optimiser update",
+            "probabilities": "before the optimiser update",
+            "activations": "before the optimiser update",
+            "loss": "before the optimiser update",
+            "weights": "after the optimiser update",
+            "note": (
+                "The image, prediction, probabilities, activations and loss come "
+                "from the forward pass that this step backpropagated. The weights "
+                "were read from the layers after optimiser.step(), so the drawn "
+                "colours are the newest real parameters."
+            ),
+        },
+        "weights": {
+            "selection": (
+                f"the same {PARTIAL_TOP_K} connections per neuron in every frame: "
+                "the top-K incoming |weight| of the initial model, fixed for the run"
+            ),
+            "step": step,
+            "checksum_before": checksum_before,
+            "checksum_after": weights_checksum(layers),
+            "layers": visible_weight_layers(module, selection),
+        },
     }
 
 

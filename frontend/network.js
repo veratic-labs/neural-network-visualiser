@@ -15,7 +15,14 @@
  * This module only renders the data it is handed. It has no knowledge of where
  * that data comes from: `main.js` receives the real weights and the real
  * per-layer activations from the FastAPI backend over a WebSocket and hands
- * them over with `setModel()` and `setActivations()`.
+ * them over with `setModel()`, `setActivations()` and, once per training step,
+ * `updateFrame()`.
+ *
+ * Every connection is coloured by `weightColour()`: one fixed diverging scale
+ * from dark red (negative) through neutral grey (zero) to dark purple
+ * (positive), drawn on a light canvas. Because the scale never moves, the same
+ * weight always looks the same — in every layer, in both modes and at every
+ * training step.
  */
 
 export const ARCHITECTURE = [
@@ -25,19 +32,67 @@ export const ARCHITECTURE = [
   { name: "Output", size: 10 },
 ];
 
-/** Number of strongest connections kept per receiving neuron in partial mode. */
+/** Number of connections kept per receiving neuron in partial mode. */
 export const PARTIAL_TOP_K = 5;
 
-// Positive and negative weights use two contrasting hues; alpha and line width
-// carry the magnitude. Neuron fill is deliberately a separate encoding: teal,
-// brighter for a stronger activation, never the sign of a weight.
-const POSITIVE_COLOUR = { r: 90, g: 169, b: 255 };
-const NEGATIVE_COLOUR = { r: 255, g: 122, b: 69 };
-const ACTIVATION_COLOUR = { r: 94, g: 234, b: 212 };
+/**
+ * The one weight scale every layer and both modes share, from the most negative
+ * to the most positive weight that is still drawn distinctly. A weight is
+ * `Math.abs(weight) / MAX_DISPLAY_WEIGHT` of the way to the end of the scale and
+ * saturates there instead of stretching it. Because the scale is fixed, an
+ * unchanged weight always looks the same, in every layer and at every step, no
+ * matter what the other weights do. It is purely visual and has no influence on
+ * training.
+ */
+export const MIN_DISPLAY_WEIGHT = -0.5;
+export const MAX_DISPLAY_WEIGHT = 0.5;
 
-const INTENSITY_BINS = 8;
-const ALPHA_MIN = 0.04;
-const ALPHA_MAX = 0.42;
+/**
+ * The diverging weight scale, running from MIN_DISPLAY_WEIGHT to
+ * MAX_DISPLAY_WEIGHT: dark red for strongly negative weights, light orange for
+ * weakly negative ones, neutral grey at zero, light blue for weakly positive
+ * weights and dark purple for strongly positive ones.
+ *
+ * Colour carries both the sign and the magnitude, so every connection can be
+ * drawn at the same, fairly high opacity and even weak weights stay visible on
+ * the light canvas. Neuron fill is a deliberately separate encoding: teal,
+ * deeper for a stronger activation, never the sign of a weight.
+ */
+const NEGATIVE_COLOUR = { r: 185, g: 28, b: 28 }; // #b91c1c — strong negative
+const NEGATIVE_WEAK_COLOUR = { r: 253, g: 186, b: 116 }; // #fdba74 — weak negative
+const ZERO_COLOUR = { r: 203, g: 213, b: 225 }; // #cbd5e1 — no weight
+const POSITIVE_WEAK_COLOUR = { r: 147, g: 197, b: 253 }; // #93c5fd — weak positive
+const POSITIVE_COLOUR = { r: 109, g: 40, b: 217 }; // #6d28d9 — strong positive
+const ACTIVATION_COLOUR = { r: 13, g: 148, b: 136 }; // #0d9488
+const NEURON_COLOUR = { r: 148, g: 163, b: 184 }; // #94a3b8
+
+/**
+ * The stops of the weight scale. They are evenly spaced along the weight axis
+ * (every step is MAX_DISPLAY_WEIGHT / 2), so a plain five-stop gradient over
+ * these same colours reproduces the ramp exactly — which is how `main.js` paints
+ * the legend, through `weightColour()`.
+ */
+const WEIGHT_COLOUR_STOPS = [
+  { weight: MIN_DISPLAY_WEIGHT, colour: NEGATIVE_COLOUR },
+  { weight: MIN_DISPLAY_WEIGHT / 2, colour: NEGATIVE_WEAK_COLOUR },
+  { weight: 0, colour: ZERO_COLOUR },
+  { weight: MAX_DISPLAY_WEIGHT / 2, colour: POSITIVE_WEAK_COLOUR },
+  { weight: MAX_DISPLAY_WEIGHT, colour: POSITIVE_COLOUR },
+];
+
+/**
+ * Every connection is drawn at this opacity, whatever its weight: magnitude is
+ * in the colour, so weak lines do not have to fade into the background to stay
+ * unobtrusive.
+ */
+const CONNECTION_OPACITY = 0.9;
+
+/**
+ * How many colours the cached connection styles sample the scale into. Each line
+ * still gets the colour of its own weight; the table only avoids building and
+ * re-parsing 100,000 CSS strings on every Full repaint.
+ */
+const COLOUR_STEPS = 256;
 
 /**
  * Total number of weight connections between consecutive layers.
@@ -68,6 +123,8 @@ function maxAbs(values) {
 /**
  * Indices of the `k` largest-magnitude values inside one row of a weight matrix.
  * The rule is deterministic: identical weights always produce identical lines.
+ * It is used once, when a model is loaded, to derive the initial partial
+ * selection; that selection is then fixed for the rest of the run.
  */
 function topIndicesByMagnitude(values, offset, count, k) {
   const scored = new Array(count);
@@ -82,14 +139,112 @@ function topIndicesByMagnitude(values, offset, count, k) {
   return indices;
 }
 
+/** A colour `t` of the way from `from` to `to` (0 = from, 1 = to). */
+function mixColour(from, to, t) {
+  return {
+    r: Math.round(from.r + (to.r - from.r) * t),
+    g: Math.round(from.g + (to.g - from.g) * t),
+    b: Math.round(from.b + (to.b - from.b) * t),
+  };
+}
+
 /**
- * Dense layers overlap heavily when every line is drawn. Their lines are drawn
- * slightly fainter so the layer structure stays readable; within a layer the
- * intensity still encodes |weight| relative to that layer's strongest weight.
+ * A weight as a 0..1 display magnitude on the fixed scale shared by every layer
+ * and both modes. Values at or beyond MAX_DISPLAY_WEIGHT saturate instead of
+ * stretching the scale, so the same weight always has the same magnitude.
  */
-function layerAlphaScale(connectionCount) {
-  const scale = Math.sqrt(20000 / Math.max(1, connectionCount));
-  return Math.min(1, Math.max(0.45, scale));
+function weightScaleMagnitude(weight) {
+  return Math.min(1, Math.abs(weight) / MAX_DISPLAY_WEIGHT);
+}
+
+/**
+ * The same magnitude as a signed position in -1..1, which is what puts a
+ * negative weight on the warm half of the scale and a positive one on the cool
+ * half. The magnitude saturates, the sign never does.
+ */
+function weightScalePosition(weight) {
+  const magnitude = weightScaleMagnitude(weight);
+  return weight < 0 ? -magnitude : magnitude;
+}
+
+/**
+ * The colour of a weight on the diverging scale: smooth interpolation between
+ * the five stops, with values beyond ±MAX_DISPLAY_WEIGHT clamped to the endpoint
+ * colours.
+ *
+ * This is the only place where a weight becomes a colour, so a given weight
+ * always looks the same: no per-layer factor, no normalisation against the other
+ * weights, no dependence on the training step. `main.js` paints the legend from
+ * this very function, so the swatches and the lines cannot disagree.
+ *
+ * @param {number} weight
+ * @returns {{ r: number, g: number, b: number }}
+ */
+export function weightColour(weight) {
+  const scaled = weightScalePosition(weight) * MAX_DISPLAY_WEIGHT;
+
+  for (let index = 0; index < WEIGHT_COLOUR_STOPS.length - 1; index += 1) {
+    const from = WEIGHT_COLOUR_STOPS[index];
+    const to = WEIGHT_COLOUR_STOPS[index + 1];
+    if (scaled > to.weight) continue;
+
+    const span = to.weight - from.weight;
+    const t = span === 0 ? 0 : (scaled - from.weight) / span;
+    return mixColour(from.colour, to.colour, t);
+  }
+
+  return WEIGHT_COLOUR_STOPS[WEIGHT_COLOUR_STOPS.length - 1].colour;
+}
+
+/**
+ * Cached CSS colours for the connections: 256 samples of `weightColour()` at a
+ * constant opacity, built once. Every line is drawn individually, so the Full
+ * view can overlay 109,184 translucent lines exactly like the Partial view does,
+ * without building a colour string for each one.
+ */
+let connectionStyles = null;
+
+/** The weight at the centre of one colour step. */
+function weightAtStep(step) {
+  const position = (step + 0.5) / COLOUR_STEPS; // 0..1
+  return (position * 2 - 1) * MAX_DISPLAY_WEIGHT;
+}
+
+/** The stroke style of a weight: a table lookup, not a change of colour rule. */
+function connectionStyle(weight) {
+  if (!connectionStyles) {
+    connectionStyles = new Array(COLOUR_STEPS);
+    for (let step = 0; step < COLOUR_STEPS; step += 1) {
+      connectionStyles[step] = toRgba(weightColour(weightAtStep(step)), CONNECTION_OPACITY);
+    }
+  }
+
+  const position = (weightScalePosition(weight) + 1) / 2; // 0..1, most negative first
+  const step = Math.min(COLOUR_STEPS - 1, Math.max(0, Math.floor(position * COLOUR_STEPS)));
+  return connectionStyles[step];
+}
+
+/**
+ * A fallback Partial-view selection: the PARTIAL_TOP_K largest |weight| incoming
+ * connections of every neuron, read once from freshly loaded weights.
+ *
+ * `main.js` passes the backend's own fixed selection to `setModel()`, which is
+ * what keeps both sides on exactly the same 1,010 indices; this is only used by
+ * a caller that has no selection to hand.
+ */
+function initialSelection(architecture, weights) {
+  if (!Array.isArray(weights) || !architecture || architecture.length < 2) return [];
+  if (weights.length !== architecture.length - 1) return [];
+
+  return weights.map((values, layer) => {
+    const inSize = architecture[layer].size;
+    const outSize = architecture[layer + 1].size;
+    const rows = new Array(outSize);
+    for (let out = 0; out < outSize; out += 1) {
+      rows[out] = topIndicesByMagnitude(values, out * inSize, inSize, PARTIAL_TOP_K);
+    }
+    return rows;
+  });
 }
 
 export class NetworkView {
@@ -105,8 +260,12 @@ export class NetworkView {
 
     this.mode = "full";
     this.weights = [];
+    /**
+     * The fixed Partial-view connections: one array of input indices per output
+     * neuron, per layer. Chosen once from the initial weights (backend and
+     * frontend share the same indices) and never recomputed.
+     */
     this.selection = [];
-    this.layerMaxAbs = [];
     this.activations = [];
     this.activationMax = [];
     this.totalConnections = countConnections(architecture);
@@ -134,27 +293,67 @@ export class NetworkView {
   }
 
   setWeights(weights) {
-    this.weights = weights || [];
-    this.layerMaxAbs = this.weights.map((weight) => maxAbs(weight));
-    this.selection = this.weights.map((weight, layer) => {
-      const inSize = this.architecture[layer].size;
-      const outSize = this.architecture[layer + 1].size;
-      const rows = new Array(outSize);
-      for (let out = 0; out < outSize; out += 1) {
-        rows[out] = topIndicesByMagnitude(weight, out * inSize, inSize, PARTIAL_TOP_K);
-      }
-      return rows;
-    });
-    this.cacheValid = false;
+    this.applyWeights(weights);
     this.render();
   }
 
   /**
-   * Replaces the layer sizes and the weights together, as sent by the backend's
-   * `model_info` message. Layer captions then show the sizes the model really
-   * has instead of the default ARCHITECTURE.
+   * Replaces the weight matrices without rendering, so a caller that also has
+   * new activations can draw both with one render.
+   *
+   * Nothing about the selection is recomputed here: the Partial view keeps
+   * drawing the connections chosen at load, only their values change.
+   * @param {Float32Array[]} weights
    */
-  setModel({ architecture, weights }) {
+  applyWeights(weights) {
+    this.weights = weights || [];
+    this.cacheValid = false;
+  }
+
+  /**
+   * The fixed Partial-view connection indices, as sent by the backend with
+   * `model_info`: one array of input indices per receiving neuron, per layer.
+   * @param {Array<ArrayLike<number>[]>} selection
+   */
+  setSelection(selection) {
+    this.selection = Array.isArray(selection) ? selection : [];
+    this.cacheValid = false;
+  }
+
+  /**
+   * One live training frame: the newest weights and the activations of the same
+   * step, drawn with a single render.
+   *
+   * In partial mode the backend only sends the values of the fixed selection, so
+   * the matrices are sparse (zero elsewhere). The indices themselves never
+   * change, so `this.selection` is left untouched: the same 1,010 lines stay on
+   * screen and only their colours follow the new weights.
+   *
+   * @param {{ weights?: Float32Array[], activations?: Float32Array[] }} frame
+   */
+  updateFrame({ weights = null, activations = null } = {}) {
+    const hasWeights = Array.isArray(weights) && weights.length > 0;
+    const hasActivations = Array.isArray(activations) && activations.length > 0;
+
+    if (hasWeights) this.applyWeights(weights);
+    if (hasActivations) {
+      this.activations = activations;
+      this.activationMax = activations.map((values) => maxAbs(values));
+    }
+    if (!hasWeights && !hasActivations) return;
+
+    this.render();
+  }
+
+  /**
+   * Replaces the layer sizes, the weights and the fixed partial selection
+   * together, as sent by the backend's `model_info` message. Layer captions then
+   * show the sizes the model really has instead of the default ARCHITECTURE.
+   *
+   * @param {{ architecture: object[], weights: Float32Array[],
+   *           selection?: Array<ArrayLike<number>[]> | null }} model
+   */
+  setModel({ architecture, weights, selection = null }) {
     if (architecture && architecture.length >= 2) {
       this.architecture = architecture;
       this.totalConnections = countConnections(architecture);
@@ -162,6 +361,11 @@ export class NetworkView {
       // new architecture has to redo it here.
       if (this.width > 0 && this.height > 0) this.computeLayout();
     }
+    this.setSelection(
+      Array.isArray(selection) && selection.length > 0
+        ? selection
+        : initialSelection(this.architecture, weights),
+    );
     this.setWeights(weights);
   }
 
@@ -294,34 +498,20 @@ export class NetworkView {
       const inSize = from.size;
       if (weight.length !== inSize * to.size) continue;
 
-      const scale = this.layerMaxAbs[layer] > 0 ? 1 / this.layerMaxAbs[layer] : 0;
-      const alphaScale = layerAlphaScale(weight.length);
-
-      // One path per (sign, intensity) pair: 16 stroke calls per layer instead
-      // of 100,352 individual line draws.
-      const paths = [];
-      for (let i = 0; i < INTENSITY_BINS * 2; i += 1) paths.push(new Path2D());
-
+      // The same rule as the Partial view, line by line: every connection gets
+      // the colour of its own weight at the same constant opacity, so dense areas
+      // blend into the average of the weights that are really there instead of
+      // taking the colour of whichever group happened to be drawn last.
       for (let out = 0; out < to.size; out += 1) {
         const y2 = to.ys[out];
         const rowOffset = out * inSize;
         for (let input = 0; input < inSize; input += 1) {
-          const w = weight[rowOffset + input];
-          const magnitude = Math.min(1, Math.abs(w) * scale);
-          const bin = Math.min(INTENSITY_BINS - 1, Math.floor(magnitude * INTENSITY_BINS));
-          const path = paths[(w < 0 ? INTENSITY_BINS : 0) + bin];
-          path.moveTo(from.x, from.ys[input]);
-          path.lineTo(to.x, y2);
+          ctx.strokeStyle = connectionStyle(weight[rowOffset + input]);
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.ys[input]);
+          ctx.lineTo(to.x, y2);
+          ctx.stroke();
         }
-      }
-
-      for (let bin = 0; bin < INTENSITY_BINS; bin += 1) {
-        const t = (bin + 0.5) / INTENSITY_BINS;
-        const alpha = (ALPHA_MIN + (ALPHA_MAX - ALPHA_MIN) * Math.pow(t, 1.4)) * alphaScale;
-        ctx.strokeStyle = toRgba(POSITIVE_COLOUR, alpha);
-        ctx.stroke(paths[bin]);
-        ctx.strokeStyle = toRgba(NEGATIVE_COLOUR, alpha);
-        ctx.stroke(paths[INTENSITY_BINS + bin]);
       }
     }
 
@@ -341,19 +531,18 @@ export class NetworkView {
       const inSize = from.size;
       if (weight.length !== inSize * to.size) continue;
 
-      const scale = this.layerMaxAbs[layer] > 0 ? 1 / this.layerMaxAbs[layer] : 0;
-
       for (let out = 0; out < to.size; out += 1) {
         const y2 = to.ys[out];
         const rowOffset = out * inSize;
         const indices = rows[out];
+        if (!indices) continue;
         for (let k = 0; k < indices.length; k += 1) {
           const input = indices[k];
           const w = weight[rowOffset + input];
-          const magnitude = Math.min(1, Math.abs(w) * scale);
-          const alpha = ALPHA_MIN + (ALPHA_MAX - ALPHA_MIN) * Math.pow(magnitude, 1.2);
-          ctx.strokeStyle = toRgba(w < 0 ? NEGATIVE_COLOUR : POSITIVE_COLOUR, alpha);
-          ctx.lineWidth = 0.8 + magnitude * 1.6;
+          // Colour carries sign and magnitude at a constant opacity; width keeps
+          // growing with the magnitude, as it always has in this view.
+          ctx.strokeStyle = connectionStyle(w);
+          ctx.lineWidth = 0.8 + weightScaleMagnitude(w) * 1.6;
           ctx.beginPath();
           ctx.moveTo(from.x, from.ys[input]);
           ctx.lineTo(to.x, y2);
@@ -367,7 +556,7 @@ export class NetworkView {
 
   drawNeurons(ctx) {
     // Neutral slate dot keeps the layer structure visible; the activation tint
-    // is painted on top, so an inactive neuron is simply not tinted.
+    // is mixed on top, so an inactive neuron is simply not tinted.
     for (let layer = 0; layer < this.architecture.length; layer += 1) {
       const { x, ys, step, size } = this.layout[layer];
       const radius = Math.max(0.7, Math.min(5, step * 0.34));
@@ -378,16 +567,21 @@ export class NetworkView {
       for (let i = 0; i < size; i += 1) {
         ctx.beginPath();
         ctx.arc(x, ys[i], radius, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(203, 213, 225, 0.85)";
+        ctx.fillStyle = toRgba(NEURON_COLOUR, 0.9);
         ctx.fill();
 
         if (!scaled) continue;
         const magnitude = Math.min(1, Math.abs(scaled[i]) * scale);
         if (magnitude <= 0.02) continue;
 
+        // A deeper teal for a stronger activation: dark enough to read on the
+        // light canvas, and never a weight colour, so the two never blur.
         ctx.beginPath();
         ctx.arc(x, ys[i], radius, 0, Math.PI * 2);
-        ctx.fillStyle = toRgba(ACTIVATION_COLOUR, 0.12 + 0.88 * Math.pow(magnitude, 0.6));
+        ctx.fillStyle = toRgba(
+          mixColour(NEURON_COLOUR, ACTIVATION_COLOUR, 0.15 + 0.85 * Math.pow(magnitude, 0.6)),
+          1,
+        );
         ctx.fill();
       }
     }
@@ -395,7 +589,7 @@ export class NetworkView {
     // The 10 output neurons are big enough to carry their class label.
     const outputLayer = this.layout[this.layout.length - 1];
     ctx.font = '500 11px system-ui, "Segoe UI", sans-serif';
-    ctx.fillStyle = "rgba(147, 164, 192, 0.95)";
+    ctx.fillStyle = "rgba(71, 85, 105, 0.95)";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     for (let i = 0; i < outputLayer.size; i += 1) {
@@ -412,10 +606,10 @@ export class NetworkView {
       const { x } = this.layout[layer];
       const meta = this.architecture[layer];
       ctx.font = '600 12px system-ui, "Segoe UI", sans-serif';
-      ctx.fillStyle = "rgba(230, 237, 247, 0.92)";
+      ctx.fillStyle = "rgba(30, 41, 59, 0.92)";
       ctx.fillText(meta.name, x, baseline - 15);
       ctx.font = '500 11px system-ui, "Segoe UI", sans-serif';
-      ctx.fillStyle = "rgba(147, 164, 192, 0.95)";
+      ctx.fillStyle = "rgba(100, 116, 139, 0.95)";
       ctx.fillText(`${meta.size} neurons`, x, baseline);
     }
   }

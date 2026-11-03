@@ -30,28 +30,49 @@ optimiser = torch.optim.Adam(
     lr=0.001
 )
 
+#one training step
+def train_step(images, labels):
+    """One optimiser step, exactly as the loop below always did it.
+
+    The forward pass, the loss, the backward pass and the optimiser update are
+    unchanged; the intermediate tensors are returned so the visualiser can show
+    the values of this step (they are read before the weights were updated).
+    """
+    X = images.view(-1, 784)
+
+    #forward propagation
+    Z1 = layer1(X)
+    A1 = torch.relu(Z1)
+
+    Z2 = layer2(A1)
+    A2 = torch.relu(Z2)
+
+    Y = layer3(A2)
+
+    #loss
+    loss = loss_fn(Y, labels)
+
+    #backward propagation
+    optimiser.zero_grad()
+    loss.backward()
+
+    optimiser.step()
+
+    return {
+        "X": X,
+        "A1": A1,
+        "A2": A2,
+        "Y": Y,
+        "loss": loss,
+        "images": images,
+        "labels": labels
+    }
+
 #training
 def train():
     for batch, (images, labels) in enumerate(train_loader):
-        X = images.view(-1, 784)
-
-        #forward propagation
-        Z1 = layer1(X)
-        A1 = torch.relu(Z1)
-
-        Z2 = layer2(A1)
-        A2 = torch.relu(Z2)
-
-        Y = layer3(A2)
-
-        #loss
-        loss = loss_fn(Y, labels)
-    
-        #backward propagation
-        optimiser.zero_grad()
-        loss.backward()
-
-        optimiser.step()
+        result = train_step(images, labels)
+        loss = result["loss"]
 
         #print progress
         if (batch + 1) % 100 == 0:

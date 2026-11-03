@@ -45,11 +45,25 @@
           </div>
 
           <ul class="legend">
-            <li><span class="swatch swatch-positive" aria-hidden="true"></span>Positive weight</li>
-            <li><span class="swatch swatch-negative" aria-hidden="true"></span>Negative weight</li>
+            <li class="legend-scale">
+              <span class="legend-scale-frame">
+                <span class="scale-bar" id="weight-scale-bar" aria-hidden="true"></span>
+                <span class="scale-ticks">
+                  <span>-0.5</span>
+                  <span>-0.25</span>
+                  <span>0</span>
+                  <span>+0.25</span>
+                  <span>+0.5</span>
+                </span>
+              </span>
+              <span class="legend-scale-name">
+                Weight
+                <span class="legend-aside">(red = negative, purple = positive)</span>
+              </span>
+            </li>
             <li>
               <span class="swatch swatch-neuron" aria-hidden="true"></span>Neuron activation
-              <span class="legend-aside">(brighter = stronger)</span>
+              <span class="legend-aside">(deeper = stronger)</span>
             </li>
           </ul>
           <p class="hint" id="connection-note">Waiting for the backend to send the model…</p>
@@ -100,18 +114,18 @@
               <div class="metric"><dt>Step</dt><dd id="metric-step">–</dd></div>
             </dl>
             <p class="hint">
-              Loss is this sample's cross-entropy. Epoch and step stay at zero until training
-              starts (Milestone 4).
+              Loss is the cross-entropy of the sample that step trained on. Epoch and step count
+              real optimiser steps completed, never estimates.
             </p>
           </section>
         </aside>
       </main>
 
       <footer class="footer">
-        <div class="controls" role="group" aria-label="Training controls (not available yet)">
+        <div class="controls" role="group" aria-label="Training controls">
           <button type="button" class="btn btn-primary" id="btn-start" disabled>Start</button>
           <button type="button" class="btn" id="btn-pause" disabled>Pause</button>
-          <button type="button" class="btn" id="btn-reset" disabled>Stop / Reset</button>
+          <button type="button" class="btn" id="btn-reset" disabled>Reset</button>
           <label class="speed">
             <span>Speed</span>
             <select id="speed-select" disabled>
@@ -120,8 +134,8 @@
               <option value="fast">Fast</option>
             </select>
           </label>
-          <span class="controls-note">
-            Controls are placeholders until the training loop is connected (Milestone 4).
+          <span class="controls-note" id="controls-note">
+            Waiting for the backend to send the model…
           </span>
         </div>
 
@@ -146,9 +160,9 @@
         <p class="app-note">
           The diagram shows the <strong>real weights</strong> of the existing PyTorch model in
           <code>training/training.py</code> and the <strong>real activations</strong> of one MNIST
-          sample from <code>training/data/</code>. Each sample is a forward pass only — no gradients
-          and no optimiser step — so the weight colours never change until training is added in
-          Milestone 4.
+          sample from <code>training/data/</code>. “Next sample” runs a forward pass only. “Start”
+          runs the model's own <code>Adam</code> optimiser, one image per step on the training
+          thread, and every completed step moves the weights you see.
         </p>
       </footer>
     </div>
