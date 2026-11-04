@@ -64,6 +64,58 @@ the sample is a real MNIST image, that the logits, softmax, prediction, loss and
 activations are reproducible from the transmitted weights and pixels, and that
 `next_sample` returns the next image without changing a single weight.
 
+## Record a training run (offline)
+
+Milestone 5A adds a standalone recorder that trains the same network once and
+writes the run to disk, so it can be replayed without retraining.
+
+```bash
+./venv/bin/python -m recorder.record_training --output recordings/mnist-epoch1
+```
+
+That runs one full epoch — 60,000 optimiser steps at batch size 1 — and records a
+snapshot every 10 steps, from Step 0 (the initial model) to Step 60,000. On this
+machine it takes about 50 seconds; budget a few minutes on a slower CPU. A short
+run is enough to inspect the format:
+
+```bash
+./venv/bin/python -m recorder.record_training --output recordings/verify-100 --steps 100
+```
+
+`--steps N` records only the first N steps, `--seed N` calls `torch.manual_seed()`
+before the model is created (the training script sets no seed, so the initial
+weights are otherwise random), `--chunk-size N` sets the checkpoints per chunk
+file (default 500) and `--log-every N` the progress interval. The output
+directory must not exist yet or must be empty, and must not be inside
+`training/`, `frontend/` or `docs/`.
+
+A recording directory contains:
+
+| File | Contents |
+| --- | --- |
+| `model.bin` | The 109,184 initial float32 weights, written once |
+| `model-biases.bin` | The 202 initial float32 biases |
+| `partial-indices.bin` | The 1,010 fixed Partial-mode connection indices (`uint16`) |
+| `chunks/chunk-0000.bin` | Fixed 5,688-byte records, one per checkpoint |
+| `manifest.json` | Architecture, recorded steps, layout, indices, colour scale, capture convention |
+
+`manifest.json` is written last, so its presence is what marks a recording as
+complete. Everything is little-endian and `recordings/` is ignored by Git.
+
+Each record holds the MNIST sample, its true label, the predicted digit, the
+softmax probabilities, the loss and the layer activations of the forward pass the
+step trained on — all **pre-update** — plus the 1,010 Partial weights **after**
+`optimiser.step()`. Step 0 has no sample: it is the initial model.
+
+### Check the recorder
+
+```bash
+./venv/bin/python tests/test_milestone5a.py
+```
+
+It records a 100-step run, decodes every record and compares them with the values
+PyTorch actually produced.
+
 ## Files
 
 | File | Purpose |
@@ -76,6 +128,8 @@ activations are reproducible from the transmitted weights and pixels, and that
 | `backend/visualiser.py` | Loads the existing PyTorch model, serialises it and runs one-sample forward passes |
 | `tests/test_milestone2.py` | Model → payload → HTTP/WebSocket → frontend checks |
 | `tests/test_milestone3.py` | Real sample, softmax, activations and `next_sample` checks |
+| `recorder/record_training.py` | Standalone recorder: trains one epoch and writes the binary recording plus manifest |
+| `tests/test_milestone5a.py` | Recorder checks: record layout, sizes, manifest, fixed Partial indices, recorded values vs. PyTorch |
 
 `training/` is the existing PyTorch implementation. The only change made to it
 (for Milestone 2) is a `if __name__ == "__main__":` guard around its training

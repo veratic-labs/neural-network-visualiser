@@ -7,6 +7,10 @@ training/data/
 # Model weights saved by training/training.py
 training/weights/
 
+# Training recordings written by recorder/record_training.py (tens of MB of
+# regenerable binary data; Milestone 5C copies what it needs into docs/)
+recordings/
+
 # Python bytecode and caches
 __pycache__/
 *.py[cod]
