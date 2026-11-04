@@ -1,14 +1,39 @@
 # Neural Network Training Visualiser — Implementation Plan
 
+> **Document status.** This plan was updated after Milestone 4 approval to describe the offline training-and-replay architecture. Milestones 1–4 are complete and approved; their requirements are preserved below as historical records. Milestones 5A, 5B and 5C are planned only — nothing in this document authorises their implementation yet.
+
 ## 1. Project goal
 
-Build a local web-based **real-time neural network training visualiser** for the existing PyTorch MNIST multilayer perceptron (MLP). The project is intended for learning and observation: it should show how an individual handwritten-digit image travels through the network, what the network predicts, and how the weights change after training.
+Build a web-based **neural network training visualiser** for the existing PyTorch MNIST multilayer perceptron (MLP). The project is intended for learning and observation: it should show how an individual handwritten-digit image travels through the network, what the network predicts, and how the weights change after training.
 
-**Primary approach (Plan A):** train in Python while streaming training state to an HTML/CSS/JavaScript frontend. **Fallback (Plan B):** record training snapshots first and replay them later if real-time streaming proves too slow or difficult to coordinate.
+The existing PyTorch model, training data and training algorithm are the source of truth. Do not rewrite the model in JavaScript.
 
-The existing PyTorch model, training data, and training algorithm are the source of truth. Do not rewrite the model in JavaScript.
+The project is delivered in two stages:
 
-## 2. Confirmed design decisions
+1. **Live stage — Milestones 1–4 (completed and approved):** train in Python while streaming training state over a WebSocket to an HTML/CSS/JavaScript frontend.
+2. **Offline stage — Milestones 5A–5C (planned):** record one complete training run into compact binary files, then replay that recording in the same frontend as a static website that needs no Python, FastAPI, PyTorch or WebSocket.
+
+Recording once and replaying later makes the visualisation reproducible and freely seekable, and lets it be published as a free static site. The live stage stays in the repository as the local real-time mode and must keep working.
+
+## 2. Project status and authorised scope
+
+| Milestone | Scope | Status |
+| --- | --- | --- |
+| 1 | Static visualiser frontend with mock data | Completed and approved |
+| 2 | Real PyTorch model streamed to the frontend | Completed and approved |
+| 3 | Real MNIST inference — image, softmax, activations | Completed and approved |
+| 4 | Live training controls, real optimiser steps, fixed 1,010 Partial connections | Completed and approved |
+| 5A | Training recorder | Planned — not started |
+| 5B | Offline replay visualiser | Planned — not started |
+| 5C | GitHub Pages deployment | Planned — not started |
+
+- The Milestone 1–4 requirements in this file are historical. They record what was built and approved; they are not to be re-implemented or re-scoped.
+- Milestones 5A, 5B and 5C are three separate milestones, each with its own approval gate. Do not begin one without explicit approval, and do not begin the next until the previous one is approved.
+- Nothing outside the currently authorised milestone may be implemented.
+
+## 3. Confirmed design decisions
+
+### 3.1 Original real-time decisions (Milestones 1–4) — implemented
 
 - **Development environment:** WSL2 Ubuntu for Python, PyTorch, backend and agent workflows; Windows for VS Code and browser. Serve the web UI locally (for example, `http://localhost:8000`).
 - **Model:** use the existing MNIST MLP (currently expected to be `784 → 128 → 64 → 10`); verify the actual definitions in the supplied code rather than hard-coding assumptions.
@@ -21,18 +46,33 @@ The existing PyTorch model, training data, and training algorithm are the source
 - **Progress:** place a progress bar **below the main visualisation**, with completed steps / total steps and current epoch. Progress indicates actual training steps, not animation time.
 - **Prioritise correctness and clarity over excessive animations.** Work in small verifiable increments.
 
-## 3. UX specification
+These decisions remain in force for the live mode and, where applicable, for the offline replay.
 
-### 3.1 Main page layout
+### 3.2 Offline architecture decisions (Milestones 5A–5C) — planned
+
+- **Record once, replay anywhere.** A standalone Python recorder trains the existing model and writes visualisation data to disk. The browser never trains, never needs PyTorch and never needs a server.
+- **Static delivery.** The published replay consists only of HTML, CSS, JavaScript and recorded data files, hosted on GitHub Pages.
+- **One full epoch.** The recording covers all 60,000 MNIST training samples at `batch_size = 1` — 60,000 optimiser steps — matching the existing configuration in `training/training.py`.
+- **Snapshot cadence.** Checkpoints are recorded every 10 completed optimiser steps, plus the initial state at Step 0 and the final state: 6,001 checkpoints for a complete run.
+- **Fixed Partial selection.** The 1,010 Partial connections are chosen once, before training begins, from the initial weights: the top 5 incoming |weight| per receiving neuron. They are never reselected, in Python or in JavaScript.
+- **Full weights recorded once.** The initial 109,184 connections are saved at Step 0. Full-mode colours stay static for the whole playback; updated full-network weights are not recorded.
+- **Binary float32 data.** Numerical data is stored as little-endian float32 arrays (images as uint8) and described by a JSON manifest. Checkpoints are never serialised as per-frame JSON number blobs.
+- **Real timeline.** The timeline represents actual recorded optimiser steps. There is no interpolation between checkpoints and no artificial animation frame numbering.
+- **Unchanged visuals.** Reuse the existing layout, Canvas renderer, light theme, legends and the fixed ±0.5 diverging weight colour scale.
+- **Publish from `docs/`.** Milestone 5C generates a self-contained `docs/` directory served by GitHub Pages from the `main` branch. The local Python environment, dataset and recorder stay out of the deployed site.
+
+## 4. UX specification
+
+### 4.1 Main page layout (live mode, Milestones 1–4) — implemented
 
 1. **Header:** project title, model architecture, current status (Ready / Training / Paused / Finished / Error).
-2. **Network view (central focus):** neurons arranged by layer with weighted connections. The initial view shows every connection. Once training starts, render only a defined subset of connections by default (see Section 4).
+2. **Network view (central focus):** neurons arranged by layer with weighted connections. The initial view shows every connection. Once training starts, render only a defined subset of connections by default (see Section 4.2 for the display states and Section 7.8 for the connection modes).
 3. **Current sample panel:** current MNIST image enlarged with crisp pixels, ground-truth label, predicted digit, and whether the prediction is correct. Make clear whether the displayed prediction was produced **before** or **after** the optimiser update (use one consistent convention; prefer forward-pass prediction before update).
 4. **Output panel:** 10 bars labelled 0–9, showing `softmax(logits)` probabilities; optionally expose logits separately so they are not mistaken for probabilities.
 5. **Training metrics:** current loss, epoch, step, and optionally a small historical loss chart.
 6. **Control row and bottom progress bar:** Start / Pause / Resume, speed selection, and progress `completed / total` with a percentage. Keep the progress bar visible at all times.
 
-### 3.2 Network display states
+### 4.2 Network display states
 
 **State A — Ready / overview (before training):**
 
@@ -50,22 +90,33 @@ The existing PyTorch model, training data, and training algorithm are the source
 - Clicking or hovering a neuron should reveal its layer/index, activation, bias (where applicable), and relevant incoming/outgoing weights, with an option to focus on its connections.
 - A **Show all connections** toggle during training is optional after the minimum viable version; it must not be required for the initial milestone.
 
-### 3.3 Speed and timing
+### 4.3 Speed and timing (live mode, Milestone 4) — implemented
 
 - Training progress should advance **one sample per optimiser step** (`batch_size=1`).
 - **Slow/Observe:** after each step, wait for the frontend to acknowledge or permit the next step, or otherwise use a controlled delay. This ensures humans can observe each image/weight update without missing frames. The UI must remain responsive.
 - **Normal:** moderate visualisation cadence.
 - **Fast:** remove deliberate waits and reduce UI update frequency (e.g., display every Nth training step), **without changing the underlying optimiser steps or silently skipping training samples**. The progress bar must continue to represent actual completed steps.
-- Choose practical defaults after testing. Do not make animation speed alter the learning rate or mathematics of training.
+- Choose practical defaults after testing. Do not make animation speed alter the learning rate or the mathematics of training.
 - Pause should take effect at a safe boundary between training steps (not halfway through `loss.backward()` or `optimiser.step()`).
 
-## 4. Backend design (Python)
+### 4.4 Replay UX (Milestone 5B) — planned
+
+1. **Header:** same title and architecture summary, with a status badge that says **Replay** and shows the recorded step. It must never say "Training" or imply live training.
+2. **Network view:** the same Canvas renderer and the same two modes. Full mode shows all 109,184 initial connections and stays static. Partial mode shows the fixed 1,010 recorded connections and recolours them at each selected checkpoint.
+3. **Current sample panel:** the MNIST image of the selected recorded step, its true label, the predicted digit and whether it is correct. One caption states the capture convention: the prediction, probabilities, activations and loss come from the forward pass **before** that step's optimiser update, while the displayed Partial weights are the state **after** it. At Step 0 the panel states that it is the initial model and that no optimiser step has completed.
+4. **Output panel:** the 10 softmax bars of the selected checkpoint.
+5. **Training metrics:** the recorded loss of the selected checkpoint, its epoch, its real step, and the total recorded steps.
+6. **Timeline:** a slider over the recorded checkpoints, labelled with real step numbers (0 … 60,000), not animation frames. Dragging the slider seeks directly to that checkpoint.
+7. **Playback controls and progress:** Play, Pause, Previous, Next and a playback speed selector, with the existing bottom progress bar showing the selected step / total steps. Previous and Next move exactly one checkpoint (±10 steps).
+8. **Data state:** a small indicator while recorded data is being fetched, and a clear error message if the manifest or a data file cannot be loaded. Playback must never quietly show a different checkpoint from the one selected.
+
+## 5. Live backend design (Milestones 2–4) — implemented
 
 The project already contains working PyTorch training code, data-loading utilities, and the MNIST dataset in the `training/` directory.
 
-The backend must reuse the existing implementation rather than creating a separate training system.
+The backend must reuse the existing implementation rather than creating a separate training system. This design was implemented for Milestones 2–4 and remains the local real-time mode.
 
-Suggested project structure:
+Suggested project structure as originally planned:
 
 ```text
 neural-network-visualiser/
@@ -86,7 +137,7 @@ neural-network-visualiser/
 └── README.md
 ```
 
-The filenames inside `training/` are illustrative. Inspect the actual files before implementing anything.
+The filenames inside `training/` are illustrative. As implemented, the files are `training/training.py` (model, loss, optimiser and `train_step()`), `training/load_data.py`, `backend/server.py`, `backend/trainer.py`, `backend/visualiser.py`, the four frontend files, and `tests/test_milestone2.py` … `tests/test_milestone4.py`.
 
 Use FastAPI/WebSocket if compatible with the existing project; keeping the backend simple is more important than introducing a framework unnecessarily.
 
@@ -102,7 +153,7 @@ Use FastAPI/WebSocket if compatible with the existing project; keeping the backe
 - Make only the minimum changes necessary to expose training information and support external controls.
 - Do not modify the training implementation during Milestone 1.
 
-### 4.1 Training step sequence
+### 5.1 Training step sequence
 
 For each `(image, label)` at batch size 1:
 
@@ -117,7 +168,7 @@ For the existing MLP, intermediate activations can be captured through explicit 
 
 Detach and move tensors to CPU for serialisation. Do not transmit tensors requiring gradient tracking.
 
-### 4.2 Communication
+### 5.2 Communication
 
 Use a WebSocket to send training events and receive control events.
 
@@ -146,7 +197,9 @@ For the first version, transmit only visible/subselected connection weights at e
 
 Keep full weights in the existing PyTorch model. Make connection identifiers stable so line colours update correctly.
 
-### 4.3 Correctness and stability
+As implemented, the server message types are `model_info`, `inference`, `training_state`, `training_step`, `weights` and `error`; weights, probabilities, activations and pixels travel as base64 of raw little-endian float32/uint8 bytes rather than as JSON number arrays. The implemented client commands are `start`, `pause`, `reset`, `set_speed`, `request_weights` and `next_sample`, so `resume`, `stop` and `focus_neuron` are covered by `start` after `pause`, by `reset`, and by the deferred neuron-inspection backlog in Section 8.
+
+### 5.3 Correctness and stability
 
 - Do not block the FastAPI event loop with the training loop. Run training in a worker/thread/process as appropriate and safely relay state to the WebSocket.
 - Handle disconnects gracefully. Prefer pause-on-disconnect for the initial observation-oriented design.
@@ -156,7 +209,14 @@ Keep full weights in the existing PyTorch model. Make connection identifiers sta
 - Ensure the visualisation backend does not accidentally trigger a second training process.
 - Preserve compatibility with the existing dataset paths and loading functions.
 - Any necessary modification to files inside `training/` must be minimal, explained, and limited to the currently authorised milestone.
-## 5. Frontend design
+
+### 5.4 Relationship to the offline pipeline (Milestones 5A–5C)
+
+- The live backend is **not** part of the published replay site. Milestone 5C must not deploy `backend/`.
+- The recorder (5A) reuses the model loading and serialisation helpers in `backend/visualiser.py` (`load_training_module`, `linear_layers`, `select_partial_indices`, `training_totals`, `weights_checksum`) instead of duplicating the model or the selection rule. It must never import `backend/server.py`, never bind a port and never build a second network.
+- The replay (5B) must not change live behaviour. After 5B and 5C, `./venv/bin/python -m backend.server` must still serve the live mode and `tests/test_milestone2.py`, `tests/test_milestone3.py` and `tests/test_milestone4.py` must still pass.
+
+## 6. Frontend design
 
 - Start with vanilla HTML + CSS + JavaScript; no React dependency required.
 - Use **Canvas** for network lines and neurons to avoid a huge number of DOM/SVG elements in the full overview. Use ordinary HTML for panels, controls and labels.
@@ -166,11 +226,184 @@ Keep full weights in the existing PyTorch model. Make connection identifiers sta
 - On each received snapshot, update image, predictions, loss, highlights, visible weight colours and progress. Prevent overlapping animation frames and stale state after Pause/Reset.
 - During Fast mode, coalesce/redraw at an affordable cadence while still counting every trained sample.
 
-## 6. Implementation milestones for the coding agent
+### 6.1 Replay additions (Milestone 5B) — planned
 
-Implement **one milestone at a time**. Do not redesign the user’s existing PyTorch model or introduce unrelated functionality.
+- **One renderer, one layout, two data sources.** `frontend/network.js` is reused unchanged in behaviour: `setModel()`, `setSelection()`, `setMode()`, `setWeights()`, `setActivations()` and `updateFrame()` keep doing the drawing. Only the source of the numbers changes: a WebSocket in live mode, recorded files in replay mode.
+- **Shared panel rendering.** The DOM/panel updates currently inside `main.js` (image, labels, verdict, output bars, metrics, step/epoch) should be shared by both modes rather than copied. The exact module split (for example a shared `panels.js` plus a `replay.js` data adapter, with `index.html` selecting the source) is settled at the start of 5B and reported before coding; the fixed requirement is that no second renderer and no second copy of the panel logic are created.
+- **No socket in replay.** The published page must not open a WebSocket, must not call FastAPI endpoints, and must not fall back to mock data. Load failures are reported, never hidden.
+- **Relative URLs only.** Every asset and data reference is relative (`./style.css`, `./main.js`, `./data/manifest.json`, manifest entries relative to the data directory), so the site works under a GitHub Pages project path.
+- **No interpolation and no local animation state.** The page renders exactly the checkpoint that is selected. Playback only advances the checkpoint index.
+- **Explicit provenance.** The page states it is a replay of a recorded run, shows the recorded step, and labels pre-update versus post-update values as described in Section 7.3.
 
-### Milestone 1 — Inspect existing project and build static UI
+## 7. Offline recording and replay architecture (Milestones 5A–5B)
+
+### 7.1 Pipeline
+
+```text
+training/training.py            model, MNIST data, loss, Adam, train_step()
+        │ imported unchanged
+        ▼
+recorder/record_training.py     standalone recorder (5A)
+        │ writes binary checkpoints + manifest
+        ▼
+recordings/<run-name>/          manifest.json, *.bin, chunks/*.bin
+        │ copied by the 5C build script
+        ▼
+docs/                           static site (frontend + data)
+        │ plain HTTP, relative URLs
+        ▼
+browser                         network.js renderer + replay data source (5B)
+```
+
+Training happens exactly once per recording. Viewing the recorded run never invokes Python, never trains, and never changes a weight.
+
+### 7.2 Recorder responsibilities (5A)
+
+- A standalone program in the project virtualenv, for example `./venv/bin/python -m recorder.record_training --output recordings/mnist-epoch1`. The argument name and exact path are settled at the start of 5A; the recorder must be runnable without starting the web server.
+- Imports the existing implementation through `backend.visualiser.load_training_module()` and uses that module's `layer1`, `layer2`, `layer3`, `loss_fn`, `optimiser`, `train_loader`, `train_data`, `batch_size` and `train_step()`. No second model, no copied forward/backward pass, no changed hyperparameters.
+- Drives the loop itself with `train_loader` + `train_step()` rather than calling `train()`, because `train()` writes `training/weights/mnist_mlp.pth` and offers no observation hooks. This keeps every artefact out of `training/`.
+- Calls `select_partial_indices(module)` **once**, before the first optimiser step, on the initial weights. That exact selection (640 + 320 + 50 = 1,010 indices) is written once and used for every checkpoint. It is never recomputed during or after training.
+- Records Step 0 before any optimiser step: the initial full weights, the initial values of the 1,010 selected connections, and no sample data.
+- After each completed optimiser step whose number is divisible by 10, appends one checkpoint. After the loop it guarantees a final checkpoint at the last completed step, so a complete run ends at Step 60,000.
+- Uses `training/training.py`'s existing configuration: `batch_size = 1`, one pass over the shuffled `train_loader`, 60,000 steps, `nn.CrossEntropyLoss`, `torch.optim.Adam(lr=0.001)`. It does not add epochs, batching or learning-rate changes.
+- Prints progress (`step / total`, current loss) at a sensible interval, then the final step count, elapsed time, checkpoint count and output size, so a multi-minute CPU run is observable.
+- Writes only complete recordings. A crashed or interrupted run is invalid and must be regenerated; resumability is not part of 5A.
+- Reads tensors under `torch.no_grad()` / `.detach().cpu()` and writes raw little-endian bytes. It must not keep computation graphs alive.
+- Does not write into `training/`, `frontend/` or `docs/`, and does not import `backend/server.py`.
+
+### 7.3 Capture convention: pre-update versus post-update
+
+Each checkpoint describes the completed optimiser step `k`:
+
+| Recorded value | Moment it was read |
+| --- | --- |
+| MNIST image, true label | the sample that step `k` trained on (fixed for the step) |
+| Predicted digit, softmax probabilities, loss | forward pass of step `k`, **before** `optimiser.step()` — **pre-update** |
+| Activations A1, A2 and the output layer | the same forward pass — **pre-update** |
+| The 1,010 Partial weights | after `optimiser.step()` of step `k` — **post-update** |
+
+- This is exactly the convention the approved Milestone 4 live frame uses in `backend/visualiser.py` (`build_training_step`), so live and replay describe a step identically.
+- Field names, the manifest, the page caption and the tests must all state the convention. Do not label a pre-update prediction as the result of the displayed weights.
+- Step 0 is different: it is the initial model before any optimiser step. Its record carries the initial Partial weights and is flagged as having no sample, prediction, activations or loss.
+
+### 7.4 Recorded files and binary layout
+
+```text
+<output>/
+├── manifest.json          # architecture, recorded steps, indices, layout, colour scale, capture notes
+├── model.bin              # initial full weights, 109,184 × float32, written once
+├── model-biases.bin       # initial 202 biases, once (supports neuron/bias details; optional but cheap)
+├── partial-indices.bin    # the fixed 1,010 connection indices, uint16, written once
+└── chunks/
+    ├── chunk-0000.bin     # fixed-stride checkpoint records
+    ├── chunk-0001.bin
+    └── …
+```
+
+**`model.bin`** — layer 1 `[128][784]`, layer 2 `[64][128]`, layer 3 `[10][64]`, row-major `[out][in]`, concatenated in that order, total 100,352 + 8,192 + 640 = 109,184 float32 values. This is the initial state and the only full-weight file.
+
+**`partial-indices.bin`** — per layer `[out][5]` uint16 input indices, layer-major, in the order `select_partial_indices()` returns them: 128 × 5 = 640, 64 × 5 = 320, 10 × 5 = 50, total 1,010 indices. The same file applies to every checkpoint.
+
+**Checkpoint record** — fixed stride for every checkpoint, so any record is read by arithmetic, never by parsing JSON:
+
+| Offset | Bytes | Field | Type |
+| --- | --- | --- | --- |
+| 0 | 4 | completed step | uint32 |
+| 4 | 4 | sample position in the epoch (1-based) | uint32 |
+| 8 | 1 | true label (0–9) | uint8 |
+| 9 | 1 | predicted digit (argmax softmax) | uint8 |
+| 10 | 1 | flags: bit 0 = has sample | uint8 |
+| 11 | 1 | reserved (0) | uint8 |
+| 12 | 784 | image, row-major 28 × 28 | uint8 (0–255) |
+| 796 | 40 | softmax probabilities, classes 0–9 | float32 × 10 |
+| 836 | 4 | cross-entropy loss | float32 |
+| 840 | 808 | activations: A1 (128), A2 (64), output softmax (10) | float32 × 202 |
+| 1,648 | 4,040 | Partial weights, layer-major over the 1,010 indices | float32 × 1,010 |
+| **5,688** | | **record size (bytes)** | |
+
+Notes:
+
+- All floats are little-endian float32; all arrays are row-major. Offsets keep float32 fields 4-byte aligned.
+- The 784 input activations are the image pixels divided by 255, so they are not stored twice; the frontend derives them from the uint8 image exactly as `main.js` does today.
+- The output activations are the same 10 softmax values as the probabilities field, stored again because the renderer expects a four-layer activation list. The duplication costs 40 bytes per record.
+- The Partial weights are stored in the fixed manifest order, not in a per-checkpoint order, so record `k` always describes the same 1,010 connections.
+- Step 0 uses the `has sample = 0` flag; its image, probabilities, loss and activation bytes are zero.
+
+### 7.5 Manifest contents
+
+`manifest.json` is the only JSON the replay needs, and it must fully describe its own data:
+
+- **`format`** — format name and version, byte order, record size in bytes, per-field offsets and dtypes, and the chunk naming scheme. A replay that does not recognise the version must refuse to run.
+- **`model`** — layer sizes `784 → 128 → 64 → 10`, activation (`ReLU` on both hidden layers, logits into `CrossEntropyLoss`), loss (`nn.CrossEntropyLoss`), optimiser (`torch.optim.Adam`), learning rate (`0.001`), batch size (`1`), epochs (`1`), training samples (`60,000`), total optimiser steps (`60,000`), and the sha256 checksum of the initial weights so a recording can be matched to a model state.
+- **`training`** — recording date, Python and PyTorch versions, wall-clock duration, the snapshot cadence (10), the recorded first and last step (0 and 60,000), and the exact ordered list of recorded steps (or the cadence rule plus the explicit final step).
+- **`checkpoints`** — checkpoint count (6,001) and, per chunk file, the file name, first/last step, record count and byte size.
+- **`partial`** — the selection rule ("top 5 incoming |weight| per receiving neuron of the initial model, fixed for the whole recording"), per-layer `in`/`out`/`k`, the total visible connection count (1,010), and the file holding the indices.
+- **`full`** — the initial-weight file, its connection count (109,184) and layout, the bias file, and an explicit statement that later full-network weights are not recorded.
+- **`activations`** — the per-layer sizes and order (A1 128, A2 64, output 10), that they are pre-update values, and that input activations come from the image.
+- **`images`** — 28 × 28, uint8, 0–255, row-major.
+- **`capture`** — the pre-update / post-update statement from Section 7.3, in machine-checkable field names and in prose for the UI.
+- **`colour`** — the fixed scale bounds (`-0.5` to `+0.5`) and the five stops (`#b91c1c`, `#fdba74`, `#cbd5e1`, `#93c5fd`, `#6d28d9`), matching `frontend/network.js`, plus a note that no per-layer or per-checkpoint normalisation is applied.
+- **`notes`** — the exact command used to produce the recording and any known limitation (for example "initial weights are random because the training code sets no seed; each recording stores its own").
+
+If a seed is deliberately set to make recordings reproducible, it must be recorded in the manifest. Setting one is optional and must not change the training mathematics.
+
+### 7.6 Size budget
+
+| Item | Size |
+| --- | --- |
+| Initial full weights (`model.bin`) | 436,736 bytes (≈ 0.42 MiB) |
+| Initial biases (`model-biases.bin`) | 808 bytes |
+| Fixed connection indices | 2,020 bytes |
+| One checkpoint record | 5,688 bytes |
+| All 6,001 checkpoints | ≈ 34.1 MB |
+| Complete recording | ≈ 34.6 MB |
+
+- Chunk files are sized in whole records (for example 500 checkpoints ≈ 2.8 MB each, 13 files for a complete run). The chosen chunk size is recorded in the manifest, and the loader never guesses a file's contents.
+- 34.6 MB is acceptable for a GitHub Pages project, but it must not be downloaded up front. The replay fetches the manifest, the initial model and indices once, then only the chunk it needs, caching a small window of recent chunks.
+- If transfer size ever becomes a problem, the acceptable options are chunk-level on-demand loading first, then (only with explicit approval) pre-compressed chunk files or reduced numeric precision. Precision may not be silently changed.
+
+### 7.7 Replay loading and playback (5B)
+
+- **Startup:** fetch `manifest.json`, validate the format version, then load `model.bin`, `model-biases.bin` and `partial-indices.bin` once. Only after that does playback become available; the page shows a loading state until then.
+- **Checkpoint access:** map a checkpoint to its chunk and byte offset from the manifest, fetch the chunk if it is not cached, then decode that single record in place. Seeking, Next, Previous and Play all use the same lookup, so they always show the same data for the same step.
+- **Caching:** keep the most recently used chunks in memory (for example the current chunk plus its neighbours) and prefetch the next chunk during playback. Drop old chunks when they are no longer needed; never keep all 34 MB decoded.
+- **Relative URLs:** every request is relative to the page (`./data/...`), never root-absolute, so the site works under `https://<user>.github.io/<repo>/`.
+- **Timeline:** the slider's values are checkpoint indices; its labels and readouts show the real recorded step numbers (0, 10, 20, …, 60,000). Dragging it seeks; keyboard arrow support is expected because it is a range input.
+- **Playback:** Play advances one checkpoint per tick at the chosen speed; Pause stops at the current checkpoint; Previous and Next move exactly one checkpoint. Speed changes only the dwell time per checkpoint. It never skips checkpoints, renumbers them, changes step labels or interpolates values.
+- **Rendering:** reuse the existing `NetworkView` API. Each checkpoint update sets the partial weights, activations, image, probabilities, loss and step readouts through the same functions the live mode uses.
+- **Truthfulness:** the page shows "replay" and the recorded step, never a simulated "live" state. A missing or corrupt chunk produces an error message, not a stale or invented frame.
+
+### 7.8 Full and Partial connection modes
+
+**Full mode**
+
+- Displays all 109,184 connections.
+- Uses the initial weights recorded at Step 0 (`model.bin`).
+- Keeps the full network's connections and colours static throughout playback.
+- Does not record, request or load updated full-network weights for later steps.
+- The UI states that Full mode shows the initial network, so a static diagram is not mistaken for a stalled update.
+
+**Partial mode**
+
+- Displays exactly the same fixed 1,010 connections for the whole playback, in the manifest's index order.
+- Reads their recorded weights from the selected checkpoint and updates their colours when the checkpoint changes.
+- Never reselects connections from current weight magnitude, in Python or in JavaScript. A connection that started in the top 5 stays on screen even after another weight overtakes it.
+
+### 7.9 Colour scale and theme
+
+- One fixed diverging scale for every layer, both modes and every checkpoint: `MIN_DISPLAY_WEIGHT = -0.5` to `MAX_DISPLAY_WEIGHT = 0.5` in `frontend/network.js`, dark red for strongly negative weights, light orange for weakly negative, grey at zero, light blue for weakly positive and dark purple for strongly positive.
+- The scale is never normalised per layer, per checkpoint or per recording; magnitudes saturate at ±0.5 exactly as in the approved live version.
+- Neuron activation keeps its separate teal encoding, and the light theme and legends are unchanged.
+- Recorded values are real weights. No gain, clipping or smoothing is applied to the data; only the drawing saturates.
+- The manifest repeats the bounds and stops so a viewer can confirm the data is drawn on the documented scale.
+
+## 8. Implementation milestones for the coding agent
+
+Implement **one milestone at a time**. Do not redesign the user's existing PyTorch model or introduce unrelated functionality.
+
+Milestones 1–4 below are historical and approved. Milestones 5A–5C are the current future roadmap and each needs explicit approval before work starts.
+
+### Milestone 1 — Inspect existing project and build static UI (completed and approved)
 
 - Read `train.py`/model/data pipeline to confirm actual architecture and dataset format.
 - Build the page layout, neuron/connection renderer, legend, sample/output panels and bottom progress bar with **mock data clearly marked as mock**.
@@ -178,7 +411,7 @@ Implement **one milestone at a time**. Do not redesign the user’s existing PyT
 
 **Acceptance:** page loads locally, full overview is drawn before Start, and training view can switch to partial lines.
 
-### Milestone 2 — Connect real model state
+### Milestone 2 — Connect real model state (completed and approved)
 
 - Start the Python server and establish the WebSocket.
 - Send real architecture/initial weights from the loaded PyTorch model.
@@ -186,7 +419,7 @@ Implement **one milestone at a time**. Do not redesign the user’s existing PyT
 
 **Acceptance:** displayed layer counts/weights come from the model rather than hard-coded mock values.
 
-### Milestone 3 — Single-sample real-time training
+### Milestone 3 — Single-sample real-time training (completed and approved)
 
 - Set `batch_size=1` and preserve the existing optimiser/loss.
 - Add backend step snapshots and frontend live rendering for each image in Slow mode.
@@ -194,7 +427,7 @@ Implement **one milestone at a time**. Do not redesign the user’s existing PyT
 
 **Acceptance:** each observed frame corresponds to one real completed optimiser step, and displayed numbers can be verified against PyTorch logs.
 
-### Milestone 4 — Controls and progress
+### Milestone 4 — Controls and progress (completed and approved)
 
 - Implement Start, Pause, Resume, Stop (or Reset), speed selection, and bottom progress bar.
 - Ensure Slow mode permits human observation of each frame; Fast mode speeds up training by reducing wait/visual refresh, not by skipping optimiser steps.
@@ -202,46 +435,235 @@ Implement **one milestone at a time**. Do not redesign the user’s existing PyT
 
 **Acceptance:** Pause is reliable, Resume continues without restarting, Fast completes all intended samples, and progress reaches 100% on successful completion.
 
-### Milestone 5 — Inspect neurons and improve usability
+### Milestone 5A — Training Recorder (planned)
+
+Goal: create a standalone Python program that trains the existing PyTorch model and records the results for offline visualisation.
+
+Requirements:
+
+1. Reuse the existing model, dataset, loss function, optimiser, and training logic in `training/`.
+2. Keep `batch_size = 1`.
+3. Train all 60,000 MNIST samples for one epoch, unless the existing configuration specifies otherwise. (`training/training.py` performs exactly one pass over its shuffled loader, so the recording is 60,000 optimiser steps.)
+4. Record a snapshot **every 10 completed optimiser steps**.
+5. Include the initial state at Step 0 and the final state.
+6. Each recorded snapshot should contain:
+   - actual completed training step;
+   - MNIST sample image and true label;
+   - predicted digit and Softmax probabilities;
+   - loss value;
+   - intermediate neuron activations;
+   - updated weights for the fixed 1,010 Partial-mode connections.
+7. Select the 1,010 Partial connections once, before training begins, using the existing initial Top-5 incoming absolute weights per receiving neuron.
+8. Preserve those exact connection indices throughout the entire recording.
+9. Save the initial full network weights (109,184 connections) only once.
+10. Store the recordings in a compact format suitable for loading in a browser, preferably binary float32 arrays for numerical data.
+11. Include a manifest describing the model architecture, recorded steps, fixed connection indices, colour scale, and data format.
+12. Preserve the existing training algorithm. Do not introduce a second implementation of the model.
+
+The recorded predictions and activations must be clearly identified as pre-update or post-update values, consistently with the recorded weights (Section 7.3).
+
+Implementation notes agreed here (details in Sections 7.2–7.6):
+
+- The recorder lives in a new `recorder/` area (for example `recorder/record_training.py`) and runs from the project virtualenv. It reuses `backend/visualiser.py` helpers and `training/training.py`'s `train_step()`; it does not import the FastAPI app and does not write into `training/`.
+- Recordings are written to a configurable output directory (for example `recordings/<run-name>/`), which is added to `.gitignore`.
+- The fixed Partial indices are written once, and every checkpoint stores only the 1,010 current values at those indices.
+- A short "how to record" section is added to `README.md` in this milestone.
+
+**Acceptance criteria:**
+
+- A complete recording exists with 6,001 checkpoints at steps 0, 10, 20, …, 60,000 and the manifest lists them.
+- `model.bin` contains exactly 109,184 float32 initial weights and is written once; no later full-weight file exists.
+- The manifest reproduces the architecture, the 1,010 fixed indices, the colour bounds, the capture convention and the binary layout.
+- The 1,010 indices equal `select_partial_indices()` computed on the initial weights, and no checkpoint uses a different index set.
+- A sample of recorded checkpoints matches the values observed during the recording run (loss, probabilities, activations, Partial weights) and the training log.
+- No file in `training/` is modified, and `training/training.py`'s training maths is unchanged.
+- Automated checks are added (for example `tests/test_milestone5a.py`) covering manifest completeness, counts, cadence, record size, fixed indices and the pre/post-update values. A shortened run may be used for the automated check; the full 60,000-step recording is verified manually and its size/time reported.
+
+### Milestone 5B — Offline Replay Visualiser (planned)
+
+Goal: replay the recorded training process in the browser without requiring Python, FastAPI, or WebSocket.
+
+Requirements:
+
+1. Reuse the existing frontend layout and neural network rendering implementation.
+2. Load recorded training snapshots from local static files.
+3. Add a timeline slider that allows seeking freely between recorded checkpoints.
+4. Support Play, Pause, Previous, Next, and playback speed controls.
+5. Update the MNIST image, prediction probabilities, neuron activations, loss, and Partial weights when the selected checkpoint changes.
+6. The timeline must represent actual recorded optimiser steps, not artificial animation frames.
+7. Do not interpolate between checkpoints unless explicitly approved.
+8. Preserve the existing fixed absolute weight colour scale of ±0.5 and the light theme.
+
+Connection modes are defined in Section 7.8: Full mode shows the 109,184 initial connections, static; Partial mode shows the same fixed 1,010 connections with their recorded weights updated per checkpoint. Neither mode reselects connections.
+
+Implementation notes agreed here (details in Sections 7.7 and 6.1):
+
+- The replay entry point and data adapter are added to `frontend/`; the Canvas renderer is reused, not duplicated.
+- Data is read from the recording using relative URLs and on-demand chunk loading, so it works both from a local static server and from GitHub Pages.
+- The page is explicitly labelled as a replay and states the pre-update / post-update convention.
+
+**Acceptance criteria:**
+
+- The page works when served by a plain static HTTP server with the Python backend stopped.
+- Seeking to a checkpoint shows exactly that checkpoint's recorded image, probabilities, activations, loss, step and Partial weights; repeatedly seeking back to the same checkpoint shows identical values.
+- The timeline labels and the progress readout use real recorded steps, and Previous/Next move exactly one checkpoint.
+- Play, Pause, Previous, Next and speed control work, and playback never interpolates or skips a selected checkpoint.
+- Full mode draws all 109,184 initial connections once and keeps them visually static while the timeline moves; Partial mode updates only the fixed 1,010 recorded weights.
+- Colours follow the fixed ±0.5 scale in both modes with the light theme and existing legends.
+- The replay page opens no WebSocket and makes no request outside the published data files; failures are surfaced to the user.
+- Live mode still works (`./venv/bin/python -m backend.server`) and the Milestone 2–4 tests still pass.
+- Automated checks are added (for example `tests/test_milestone5b.py`) covering manifest and chunk consistency, record decoding, the fixed indices, absence of WebSocket usage in the replay path and relative asset references. Browser behaviour is verified manually and reported.
+
+### Milestone 5C — GitHub Pages Deployment (planned)
+
+Goal: publish the offline replay visualiser as a standalone static website.
+
+Requirements:
+
+1. Generate a `docs/` directory containing the required frontend files and replay data.
+2. Ensure the deployed website works without Python, FastAPI, PyTorch, or WebSocket.
+3. Use relative paths compatible with GitHub Pages project URLs.
+4. Load recorded data efficiently, preferably in chunks or on demand.
+5. Preserve the local Python training environment separately.
+6. Exclude raw MNIST datasets, virtual environments, and unnecessary training files from the deployed website.
+7. Document the build and deployment process.
+
+Deployment design is in Section 9.
+
+**Acceptance criteria:**
+
+- `docs/` is self-contained and works when served from a subdirectory, mirroring a project Pages URL.
+- All asset and data paths are relative; no request leaves `docs/`.
+- No dataset, virtualenv, raw recordings, tests, backend code or caches are present under `docs/`.
+- The manifest and chunk files in `docs/` match the recording exactly (counts and checksums verified by the build step).
+- The published URL passes the 5B acceptance checks with no local Python running.
+- `README.md` documents recording, building `docs/`, publishing via GitHub Pages (`main` → `/docs`) and re-running the live mode locally.
+- No commit or push is made without explicit user approval.
+
+### Deferred backlog — neuron inspection and usability (former Milestone 5)
 
 - Add neuron focus/hover details and corresponding connections.
 - Add a compact loss history chart if desired.
 - Verify legibility, legends, resize behaviour and performance.
 
-**Acceptance:** user can investigate individual neuron activations/weights and see meaningful changes during training.
+Status: not authorised and not part of Milestones 5A–5C. This work needs a separate milestone and explicit approval; it must not be bundled into the replay milestones.
 
-## 7. Performance risks and mitigations
+## 9. Deployment design (Milestone 5C)
+
+### 9.1 Published layout
+
+```text
+docs/
+├── .nojekyll                # do not run Jekyll over the static site
+├── index.html
+├── style.css
+├── network.js
+├── main.js                  # entry wiring (live or replay data source)
+├── panels.js                # shared panel rendering, if extracted in 5B
+├── replay.js                # replay data source / adapter, added in 5B
+└── data/
+    ├── manifest.json
+    ├── model.bin
+    ├── model-biases.bin
+    ├── partial-indices.bin
+    └── chunks/
+        ├── chunk-0000.bin
+        └── …
+```
+
+`docs/` contains only what the replay needs. The exact module names are settled in 5B/5C; nothing about Python, the recorder, tests or the dataset may be copied into it.
+
+### 9.2 Paths
+
+- Every reference is relative: `./style.css`, `./main.js`, `./data/manifest.json`, and manifest entries relative to the `data/` directory.
+- No root-absolute paths (`/…`), no `file://` assumptions and no dependence on the repository name.
+- The same files must work at `https://<user>.github.io/<repo>/` and when served locally from a subdirectory.
+
+### 9.3 Build process
+
+- A small build script (for example `scripts/build_pages.py`, run with the project virtualenv) copies the frontend files and one chosen recording into `docs/`, and verifies record counts, byte sizes and checksums against the manifest.
+- The script refuses to copy the MNIST dataset, `venv/`, `recordings/` sources, `tests/`, `backend/`, `__pycache__/`, editor metadata and Git files.
+- The published `docs/` content is committed, so no build step runs in the browser and no Python is needed by visitors.
+- Rebuilding for a new recording replaces the data files in place and must leave the manifest and chunks consistent. The build fails loudly rather than publishing a mismatched recording.
+
+### 9.4 Exclusions
+
+| Excluded | Reason |
+| --- | --- |
+| `training/data/` (raw/processed MNIST) | Large, and only needed to record or train locally |
+| `venv/` | Machine-specific Python environment |
+| `recordings/` | Local recorder output; only the published copy under `docs/data/` ships |
+| `backend/`, `tests/`, `recorder/` | Not required by a static site |
+| `__pycache__/`, `*.py[cod]`, `*:Zone.Identifier` | Caches and platform noise |
+| `.git/`, editor configuration | Never published |
+
+### 9.5 Publishing steps (documented in `README.md` during 5C)
+
+1. Generate a recording with the recorder from 5A.
+2. Run the build script to produce `docs/`.
+3. Review the diff, then commit `docs/` — only with explicit user approval; no automatic commits or pushes.
+4. On GitHub: **Settings → Pages → Deploy from a branch → `main` → `/docs`**.
+5. Open the published URL and repeat the Milestone 5B acceptance checks there.
+
+### 9.6 Verification
+
+- Serve the repository root with a plain static server (for example `./venv/bin/python -m http.server 8100`) and open `http://localhost:8100/docs/` — a subpath, like a project Pages URL.
+- Confirm the page loads with the backend stopped, opens no WebSocket, and requests nothing outside `docs/`.
+- Confirm timeline seeking, Play/Pause/Previous/Next, speed, Full-mode static colours, Partial-mode updates and the ±0.5 colour scale.
+- Confirm a cold reload and a cached reload both work, and that a deliberately missing chunk produces a clear error instead of a wrong frame.
+- Confirm the live mode still runs from `./venv/bin/python -m backend.server` and the Milestone 2–4 tests still pass.
+
+## 10. Performance risks and mitigations
 
 | Risk | Mitigation |
 | --- | --- |
-| Full initial overview draws ~109k lines | Use Canvas, render/cached static overview once; switch to partial lines before updates |
-| Batch size 1 requires many updates | Adjustable pacing, coalesced fast-mode rendering and progress-only updates |
-| Full weights over WebSocket every step are expensive | Send visible connection values; use occasional full snapshots or binary encoding if needed |
-| Training blocks the local web server | Use a worker/thread/process with coordinated pause and event messaging |
-| Predictions and weights belong to different moments | Explicitly label pre-update outputs and post-update weights |
-| Browser disconnects mid-training | Pause safely and permit reconnect, or document a simpler stop/restart policy |
-| Dense 784-input layer is hard to inspect | Show compact neuron layout, zoom/pan or focused inspection without hiding actual model size |
+| Full initial overview draws ~109k lines | Use Canvas, render/cache the static overview once; reuse the existing cached bitmap in `network.js` |
+| Batch size 1 requires many updates | The recording runs once without a browser; replay uses 6,001 checkpoints instead of 60,000 frames |
+| Full weights over WebSocket every step are expensive | Live mode sends only visible connections; replay stores full weights once and 1,010 values per checkpoint |
+| Training blocks the local web server | Live training runs on a single worker thread; the recorder runs as a separate offline process |
+| Predictions and weights belong to different moments | Explicit pre-update / post-update labelling in the manifest, UI and tests (Section 7.3) |
+| Browser disconnects mid-training | Live mode pauses safely; replay has no connection to lose |
+| Dense 784-input layer is hard to inspect | Compact neuron layout and focus inspection; the renderer already handles scale |
+| A 34 MB recording exceeds comfortable page weight | Never download it all: fetch the manifest, initial weights and indices once, then load chunks on demand with a small cache and prefetch |
+| Seeking far along the timeline stalls on a chunk fetch | Show a loading state, keep recent chunks cached, prefetch the next chunk during playback |
+| GitHub Pages file and repository limits | 13 chunk files of ≈ 2.8 MB are well under the 100 MB per-file limit; keep raw datasets and environments out of `docs/` |
+| Rebuilding grows Git history with binary data | Only rebuild when the recording changes; if the repository becomes too large, reduce cadence or precision only with explicit approval |
+| A recording and frontend drift out of sync | Manifest format version, field offsets and checksums; the replay refuses an unknown version and the build verifies counts |
+| 60,000 CPU optimiser steps take time to record | Record once, log progress, report elapsed time and size; no need to repeat for viewing |
+| Interrupted recording looks usable | Recordings are written only as complete runs; a partial output is invalid and is regenerated |
 
-## 8. Plan B — Offline capture and replay (fallback only)
+## 11. Plan evolution: live streaming versus offline replay
 
-If live training/rendering cannot keep up, or networking becomes disproportionately complex:
+- Milestones 1–4 implemented the original Plan A (live WebSocket streaming) and were approved. That code remains the local real-time mode and is not removed.
+- Plan B (record first, replay later) was originally the fallback. It is now the chosen architecture for the published visualiser, because replaying removes the browser/server coupling, makes every displayed frame reproducible and freely seekable, and allows free static hosting.
+- Consequences of the change:
+  - the replay timeline has 6,001 checkpoints (every 10 optimiser steps), not one frame per training sample;
+  - full-network weights are recorded only at Step 0, so Full mode is intentionally static;
+  - the shown prediction/activations always come from the step's forward pass, while the Partial weights are that step's post-update state;
+  - changing the model, the data pipeline or the cadence requires a new recording; the manifest and checksums make mismatches detectable.
+- The live mode remains available locally and must continue to pass its tests.
 
-1. Keep the same frontend and rendering code.
-2. Replace live WebSocket step events with a recorded stream or structured snapshot files.
-3. During PyTorch training, record per-step image, label, prediction, loss and needed activations, plus sampled weight snapshots (not necessarily every full tensor every step).
-4. Replay snapshots in the same UI with Slow/Normal/Fast, Pause, timeline scrub and progress.
-5. Clearly identify this as **replay**, not live training.
-
-This is a fallback, not the starting implementation.
-
-## 9. Out of scope for the first version
+## 12. Out of scope for the current version
 
 - Rewriting the trained model in JavaScript.
+- Training inside the browser, or replaying through a Python server.
 - Supporting arbitrary neural network architectures beyond the existing MNIST MLP.
 - Distributed training, cloud deployment or account systems.
 - Detailed gradient/backpropagation animations or optimiser internals unless explicitly requested later.
 - Saving an enormous complete model snapshot for every single sample.
+- Interpolation, tweening or synthetic frames between recorded checkpoints.
+- Resumable recordings, multiple epochs, multiple recordings in one player, or per-step full-network weights.
+- Recording gradients, Adam moments or other optimiser state.
+- Git LFS, GitHub Actions deployment automation or server-side rendering, unless separately approved.
 
-## 10. Definition of done
+## 13. Definition of done
 
-The project is complete for Version 1 when the user can open a local webpage, see **all neurons and connections before training**, press Start to observe actual **batch-size-1 PyTorch training**, see the display switch to **partial connections**, watch each MNIST image and its predicted probabilities with neuron activations and changing weight colours, adjust between slow human-observable and fast modes, pause/resume safely, and watch a correct progress bar below the visualisation reach completion.
+### 13.1 Version 1 — live visualiser (met at Milestone 4)
+
+The user can open a local webpage, see **all neurons and connections before training**, press Start to observe actual **batch-size-1 PyTorch training**, see the display switch to **partial connections**, watch each MNIST image and its predicted probabilities with neuron activations and changing weight colours, adjust between slow human-observable and fast modes, pause/resume safely, and watch a correct progress bar below the visualisation reach completion.
+
+### 13.2 Version 2 — offline replay (Milestones 5A–5C)
+
+A visitor can open the GitHub Pages URL on a machine with no Python installed, see the initial network with all 109,184 connections, drag the timeline to any recorded step between 0 and 60,000, step forwards and backwards one checkpoint at a time, play or pause the recording, watch the recorded MNIST sample, softmax probabilities, neuron activations, loss and the changing 1,010 Partial connection weights, switch to Full mode and see the initial network remain static, and read from the page and the manifest which values are pre-update and which are post-update. The displayed numbers match the Python training log for the recorded steps.
+
+This is complete only when the user explicitly approves Milestones 5A, 5B and 5C in order.
