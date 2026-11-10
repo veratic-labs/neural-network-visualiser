@@ -447,8 +447,13 @@ def check_frontend_sources() -> None:
         "main.js handles inference messages",
     )
     check(
-        "decodePixels" in main_js and "drawSampleImage" in main_js,
+        "decodePixels" in main_js and 'from "./panels.js"' in main_js,
         "main.js draws the received MNIST pixels",
+    )
+    panels_js = (REPO_ROOT / "frontend" / "panels.js").read_text()
+    check(
+        "export function drawSampleImage(" in panels_js and "putImageData" in panels_js,
+        "panels.js paints the 28 x 28 sample canvas",
     )
     check(
         "setActivations(" in main_js and "setActivations(" in network_js,

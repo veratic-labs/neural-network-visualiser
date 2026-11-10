@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Neural Network Training Visualiser — Replay</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <!--
+    The recording this page replays, relative to this file, so the site also
+    works under a subdirectory such as GitHub Pages. `replay.js` reads the
+    attribute and fetches every file below it; nothing else is contacted.
+  -->
+  <body data-recording="../recordings/mnist-epoch1/">
+    <div class="app">
+      <header class="app-header">
+        <div class="brand">
+          <h1>Neural Network Training Visualiser — Replay</h1>
+          <p class="subtitle">
+            Recorded MNIST multilayer perceptron ·
+            <span id="architecture-summary">784 → 128 → 64 → 10</span> · run
+            <span id="run-name">–</span>
+          </p>
+        </div>
+        <div class="badges">
+          <span class="badge badge-status" id="status-badge">Loading recording…</span>
+          <span class="badge badge-model" id="model-badge">Replay</span>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel panel-network" aria-labelledby="network-heading">
+          <div class="panel-head">
+            <h2 id="network-heading">Network overview</h2>
+            <div class="segmented" role="group" aria-label="Connection display mode">
+              <button type="button" class="segment is-active" id="mode-all" aria-pressed="true">
+                All connections
+              </button>
+              <button type="button" class="segment" id="mode-partial" aria-pressed="false">
+                Partial (training)
+              </button>
+            </div>
+          </div>
+
+          <div class="canvas-wrap">
+            <canvas
+              id="network-canvas"
+              aria-label="Network diagram: 784 input neurons, hidden layers of 128 and 64 neurons, and 10 output neurons"
+            ></canvas>
+          </div>
+
+          <ul class="legend">
+            <li class="legend-scale">
+              <span class="legend-scale-frame">
+                <span class="scale-bar" id="weight-scale-bar" aria-hidden="true"></span>
+                <span class="scale-ticks">
+                  <span>-0.5</span>
+                  <span>-0.25</span>
+                  <span>0</span>
+                  <span>+0.25</span>
+                  <span>+0.5</span>
+                </span>
+              </span>
+              <span class="legend-scale-name">
+                Weight
+                <span class="legend-aside">(red = negative, purple = positive)</span>
+              </span>
+            </li>
+            <li>
+              <span class="swatch swatch-neuron" aria-hidden="true"></span>Neuron activation
+              <span class="legend-aside">(deeper = stronger)</span>
+            </li>
+          </ul>
+          <p class="hint" id="connection-note">Loading the recorded network…</p>
+        </section>
+
+        <aside class="side">
+          <section class="panel" aria-labelledby="sample-heading">
+            <div class="panel-head">
+              <h2 id="sample-heading">Current sample</h2>
+              <span class="tag tag-live" id="sample-step">step –</span>
+            </div>
+            <div class="sample-body">
+              <div class="sample-frame">
+                <canvas id="sample-canvas" width="28" height="28"></canvas>
+              </div>
+              <dl class="facts">
+                <div class="fact"><dt>Sample</dt><dd id="sample-index">–</dd></div>
+                <div class="fact"><dt>True label</dt><dd id="sample-true">–</dd></div>
+                <div class="fact"><dt>Predicted</dt><dd id="sample-predicted">–</dd></div>
+                <div class="fact">
+                  <dt>Result</dt><dd><span class="pill" id="sample-verdict">–</span></dd>
+                </div>
+              </dl>
+            </div>
+            <p class="hint">
+              The image, prediction, probabilities, activations and loss were captured
+              <strong>before</strong> that step's optimiser update; the Partial weights shown were read
+              <strong>after</strong> it. Step 0 is the initial model: no sample and no optimiser step.
+            </p>
+          </section>
+
+          <section class="panel" aria-labelledby="outputs-heading">
+            <div class="panel-head">
+              <h2 id="outputs-heading">Class probabilities</h2>
+              <span class="tag tag-live">softmax</span>
+            </div>
+            <div class="output-list" id="output-list"></div>
+            <p class="hint">Filled bar = predicted class · outlined label = true class.</p>
+          </section>
+
+          <section class="panel" aria-labelledby="metrics-heading">
+            <div class="panel-head">
+              <h2 id="metrics-heading">Training metrics</h2>
+              <span class="tag tag-live">recorded</span>
+            </div>
+            <dl class="metrics">
+              <div class="metric"><dt>Loss</dt><dd id="metric-loss">–</dd></div>
+              <div class="metric"><dt>Epoch</dt><dd id="metric-epoch">–</dd></div>
+              <div class="metric"><dt>Step</dt><dd id="metric-step">–</dd></div>
+            </dl>
+            <p class="hint">
+              Loss is the recorded cross-entropy of the sample that step trained on, captured before
+              its optimiser update. Epoch and step are the recorded optimiser steps, never estimates.
+            </p>
+          </section>
+
+          <section class="panel" aria-labelledby="recording-heading">
+            <div class="panel-head">
+              <h2 id="recording-heading">Recording</h2>
+              <span class="tag tag-live">offline</span>
+            </div>
+            <dl class="facts">
+              <div class="fact"><dt>Checkpoints</dt><dd id="recording-checkpoints">–</dd></div>
+              <div class="fact"><dt>Steps</dt><dd id="recording-steps">–</dd></div>
+              <div class="fact"><dt>Cadence</dt><dd id="recording-cadence">–</dd></div>
+            </dl>
+            <p class="hint" id="data-note" role="status">Fetching the recording manifest…</p>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="footer">
+        <div class="timeline">
+          <div class="timeline-head">
+            <label for="timeline">Timeline · recorded checkpoints</label>
+            <span id="timeline-readout">step 0</span>
+          </div>
+          <input
+            type="range"
+            id="timeline"
+            min="0"
+            max="0"
+            step="1"
+            value="0"
+            aria-label="Recorded checkpoint timeline, labelled by real optimiser step"
+            aria-valuetext="step 0"
+            disabled
+          />
+          <div class="timeline-ticks">
+            <span id="timeline-first">step 0</span>
+            <span id="timeline-middle">–</span>
+            <span id="timeline-last">–</span>
+          </div>
+        </div>
+
+        <div class="controls" role="group" aria-label="Replay controls">
+          <button type="button" class="btn btn-primary" id="btn-play" disabled>Play</button>
+          <button type="button" class="btn" id="btn-pause" disabled>Pause</button>
+          <button type="button" class="btn" id="btn-prev" disabled>Previous</button>
+          <button type="button" class="btn" id="btn-next" disabled>Next</button>
+          <label class="speed">
+            <span>Speed</span>
+            <select id="speed-select" disabled>
+              <option value="slow">Slow (observe)</option>
+              <option value="normal" selected>Normal</option>
+              <option value="fast">Fast</option>
+            </select>
+          </label>
+          <span class="controls-note" id="controls-note">
+            Loading the recorded checkpoints…
+          </span>
+        </div>
+
+        <div class="progress">
+          <div class="progress-head">
+            <span id="progress-text">Loading…</span>
+            <span id="progress-percent">0.0%</span>
+          </div>
+          <div
+            class="progress-track"
+            id="progress-bar"
+            role="progressbar"
+            aria-label="Replay progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+        </div>
+
+        <p class="app-note">
+          This page replays a <strong>recorded</strong> run from plain static files: no Python, no
+          server, no WebSocket. Play, Pause, Previous and Next move through the recorded checkpoints,
+          and the timeline's labels are real optimiser steps. Full mode draws every connection of the
+          initial model recorded at Step 0 and stays static, because later full-network weights were
+          not recorded; Partial mode updates the fixed recorded selection at every checkpoint.
+          Nothing is interpolated: every number shown is the number stored in the recording. The live
+          mode is still <a href="index.html">index.html</a> with the Python backend running.
+        </p>
+      </footer>
+    </div>
+
+    <script type="module" src="replay.js"></script>
+  </body>
+</html>

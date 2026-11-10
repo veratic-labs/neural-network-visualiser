@@ -17,6 +17,9 @@
  * A `training_step` frame carries the newest weights together with the image,
  * prediction and loss of the step that was just taken. network.js keeps
  * handling all canvas drawing; this file decides which of that data to show.
+ *
+ * The panels themselves are written by panels.js, which the replay page uses
+ * too, so both pages show the same image, facts, bars, metrics and progress.
  */
 
 import {
@@ -28,6 +31,15 @@ import {
   countConnections,
   weightColour,
 } from "./network.js";
+import {
+  buildOutputRows,
+  formatNumber,
+  renderProgressPanel,
+  setStatus,
+  updateLossMetric,
+  updateOutputRows,
+  updateSamplePanel,
+} from "./panels.js";
 
 /** WebSocket endpoint exposed by backend/server.py. */
 const SOCKET_PATH = "/ws";
@@ -95,17 +107,6 @@ let lastFullWeightRequest = 0;
 // The view starts without weights: neurons and captions render immediately and
 // the 109,184 connections appear as soon as the model arrives.
 const view = new NetworkView(elements.networkCanvas, { architecture: ARCHITECTURE });
-
-function formatNumber(value) {
-  return value.toLocaleString("en-GB");
-}
-
-/** Updates the header status badge: connecting, ready or failed. */
-function setStatus(text, tone) {
-  elements.statusBadge.textContent = text;
-  elements.statusBadge.classList.toggle("is-ready", tone === "ready");
-  elements.statusBadge.classList.toggle("is-error", tone === "error");
-}
 
 /**
  * Decodes the backend's base64 weight/activation payload into float32 values.
@@ -204,7 +205,7 @@ function handleModelInfo(message) {
 
   if (!shapesMatch || connectionCount !== countConnections(architecture)) {
     console.error("model_info does not match its own architecture", message);
-    setStatus("Model data invalid", "error");
+    setStatus(elements, "Model data invalid", "error");
     return;
   }
 
@@ -228,7 +229,7 @@ function handleModelInfo(message) {
   // The same payload carries the training status, so a page that is reloaded
   // mid-run shows the right buttons, speed and progress straight away.
   if (message.training) applyTrainingState(message.training);
-  else setStatus("Ready", "ready");
+  else setStatus(elements, "Ready", "ready");
 
   console.info(
     `model_info: ${architecture.map((layer) => layer.size).join("→")}, ` +
@@ -256,7 +257,7 @@ function handleInference(message) {
     activations = (message.activations || []).map(decodeFloat32);
   } catch (error) {
     console.error("could not read the inference message", error, message);
-    setStatus("Sample data invalid", "error");
+    setStatus(elements, "Sample data invalid", "error");
     return;
   }
 
@@ -268,17 +269,17 @@ function handleInference(message) {
       message.weights_checksum,
       model.weights_checksum,
     );
-    setStatus("Weights changed", "error");
+    setStatus(elements, "Weights changed", "error");
   }
 
-  drawSampleImage(elements.sampleCanvas, image);
-
-  const correct = message.predicted_label === message.true_label;
-  elements.sampleIndex.textContent = `${formatNumber(sample.index + 1)} / ${formatNumber(sample.total)}`;
-  elements.sampleTrue.textContent = String(message.true_label);
-  elements.samplePredicted.textContent = String(message.predicted_label);
-  elements.sampleVerdict.textContent = correct ? "Correct" : "Incorrect";
-  elements.sampleVerdict.className = `pill ${correct ? "pill-ok" : "pill-bad"}`;
+  updateSamplePanel(elements, {
+    image,
+    position: sample.index + 1,
+    total: sample.total,
+    trueLabel: message.true_label,
+    predictedLabel: message.predicted_label,
+    correct: message.predicted_label === message.true_label,
+  });
 
   updateOutputRows(outputRows, {
     probabilities,
@@ -286,7 +287,7 @@ function handleInference(message) {
     predictedLabel: message.predicted_label,
   });
 
-  elements.metricLoss.textContent = Number(message.loss).toFixed(4);
+  updateLossMetric(elements, message.loss);
   view.setActivations(activations);
 
   window.clearTimeout(nextSampleTimeout);
@@ -354,9 +355,9 @@ function updateControls() {
     ? training.message
     : "Waiting for the backend to send the model…";
 
-  if (!connected) setStatus("Connecting…");
-  else if (state === "idle" || state === "complete") setStatus(STATE_BADGES[state], "ready");
-  else setStatus(STATE_BADGES[state] || "Ready");
+  if (!connected) setStatus(elements, "Connecting…");
+  else if (state === "idle" || state === "complete") setStatus(elements, STATE_BADGES[state], "ready");
+  else setStatus(elements, STATE_BADGES[state] || "Ready");
 }
 
 /** Handles a `training_state` message (start, pause, speed, reset, finish). */
@@ -407,14 +408,14 @@ function handleTrainingStep(frame) {
     return;
   }
 
-  drawSampleImage(elements.sampleCanvas, image);
-
-  elements.sampleIndex.textContent =
-    `${formatNumber(sample.position)} / ${formatNumber(sample.total)}`;
-  elements.sampleTrue.textContent = String(frame.true_label);
-  elements.samplePredicted.textContent = String(frame.predicted_label);
-  elements.sampleVerdict.textContent = frame.correct ? "Correct" : "Incorrect";
-  elements.sampleVerdict.className = `pill ${frame.correct ? "pill-ok" : "pill-bad"}`;
+  updateSamplePanel(elements, {
+    image,
+    position: sample.position,
+    total: sample.total,
+    trueLabel: frame.true_label,
+    predictedLabel: frame.predicted_label,
+    correct: frame.correct,
+  });
 
   updateOutputRows(outputRows, {
     probabilities,
@@ -422,7 +423,7 @@ function handleTrainingStep(frame) {
     predictedLabel: frame.predicted_label,
   });
 
-  elements.metricLoss.textContent = Number(frame.loss).toFixed(4);
+  updateLossMetric(elements, frame.loss);
 
   if (view.mode === "full") {
     // The frame only carries the selected weights, so the Full view keeps its
@@ -476,7 +477,7 @@ function socketUrl() {
 
 function scheduleReconnect() {
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-    setStatus("Backend unavailable", "error");
+    setStatus(elements, "Backend unavailable", "error");
     elements.connectionNote.textContent =
       "No backend connection. Start it with “python -m backend.server” in the project " +
       "root, then reload this page.";
@@ -484,12 +485,12 @@ function scheduleReconnect() {
   }
 
   reconnectAttempts += 1;
-  setStatus(`Reconnecting ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}…`);
+  setStatus(elements, `Reconnecting ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}…`);
   window.setTimeout(connectSocket, RECONNECT_DELAY_MS);
 }
 
 function connectSocket() {
-  if (reconnectAttempts === 0) setStatus("Connecting…");
+  if (reconnectAttempts === 0) setStatus(elements, "Connecting…");
   socket = new WebSocket(socketUrl());
 
   socket.addEventListener("open", () => {
@@ -567,71 +568,12 @@ function setMode(mode) {
   elements.modePartial.setAttribute("aria-pressed", String(partial));
 }
 
-/** Draws the 28 × 28 grayscale sample; CSS scales it up with crisp pixels. */
-function drawSampleImage(canvas, image) {
-  const context = canvas.getContext("2d");
-  canvas.width = image.width;
-  canvas.height = image.height;
-
-  const frame = context.createImageData(image.width, image.height);
-  for (let i = 0; i < image.pixels.length; i += 1) {
-    const value = Math.round(Math.min(1, Math.max(0, image.pixels[i])) * 255);
-    frame.data[i * 4] = value;
-    frame.data[i * 4 + 1] = value;
-    frame.data[i * 4 + 2] = value;
-    frame.data[i * 4 + 3] = 255;
-  }
-  context.putImageData(frame, 0, 0);
-}
-
-function buildOutputRows(container, count) {
-  container.textContent = "";
-  const rows = [];
-
-  for (let index = 0; index < count; index += 1) {
-    const row = document.createElement("div");
-    row.className = "output-row";
-
-    const label = document.createElement("span");
-    label.className = "output-label";
-    label.textContent = String(index);
-
-    const track = document.createElement("span");
-    track.className = "output-track";
-    const fill = document.createElement("span");
-    fill.className = "output-fill";
-    track.appendChild(fill);
-
-    const value = document.createElement("span");
-    value.className = "output-value";
-    value.textContent = "0.0%";
-
-    row.append(label, track, value);
-    container.appendChild(row);
-    rows.push({ row, fill, value });
-  }
-
-  return rows;
-}
-
-function updateOutputRows(rows, state) {
-  rows.forEach((entry, index) => {
-    const probability = state.probabilities[index] || 0;
-    const percent = probability * 100;
-    entry.fill.style.width = `${percent.toFixed(1)}%`;
-    entry.value.textContent = `${percent.toFixed(1)}%`;
-    entry.row.classList.toggle("is-predicted", index === state.predictedLabel);
-    entry.row.classList.toggle("is-true", index === state.trueLabel);
-  });
-}
-
 /**
  * Renders training progress from real completed optimiser steps: the bar, the
  * epoch counter and the current state. `state` is the newest `training_state`,
  * which knows the number of epochs the backend really configured.
  */
 function renderProgress(completed, total, state = null) {
-  const percent = total > 0 ? (completed / total) * 100 : 0;
   const epochs = state ? state.epochs : 1;
   const started = Boolean(state && state.state !== "idle");
 
@@ -641,15 +583,7 @@ function renderProgress(completed, total, state = null) {
     : { running: "training", paused: "paused", complete: "complete" }[state.state] ||
       "not started";
 
-  elements.metricEpoch.textContent = `${formatNumber(epoch)} / ${formatNumber(epochs)}`;
-  elements.metricStep.textContent = `${formatNumber(completed)} / ${formatNumber(total)}`;
-
-  elements.progressFill.style.width = `${percent.toFixed(2)}%`;
-  elements.progressText.textContent =
-    `${formatNumber(completed)} / ${formatNumber(total)} steps · ` +
-    `epoch ${formatNumber(epoch)} / ${formatNumber(epochs)} · ${label}`;
-  elements.progressPercent.textContent = `${percent.toFixed(1)}%`;
-  elements.progressBar.setAttribute("aria-valuenow", percent.toFixed(1));
+  renderProgressPanel(elements, { completed, total, epoch, epochs, label });
 }
 
 /** Asks the backend for the next MNIST sample's forward pass. */
@@ -698,7 +632,7 @@ function init() {
   // Empty panels until the first real sample arrives.
   outputRows = buildOutputRows(elements.outputList, ARCHITECTURE[ARCHITECTURE.length - 1].size);
   updateOutputRows(outputRows, { probabilities: [], trueLabel: -1, predictedLabel: -1 });
-  elements.metricLoss.textContent = "–";
+  updateLossMetric(elements, null);
   elements.metricEpoch.textContent = "–";
   elements.metricStep.textContent = "–";
   elements.progressText.textContent = "Waiting for the model…";

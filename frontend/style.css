@@ -287,10 +287,12 @@ strong {
 }
 
 /*
- * The diverging weight scale. The gradient of `.scale-bar` is painted by
- * main.js from network.js's own weightColour() function, so the legend always
- * shows exactly the colours the connections use, at the same five weights the
- * ticks below it name.
+ * The diverging weight scale. The live page paints the gradient of `.scale-bar`
+ * from network.js's own weightColour(), so its legend always shows exactly the
+ * colours the connections use, at the same five weights the ticks below it name.
+ * The replay page never repaints it, so the same five stop colours are declared
+ * here as well; tests/test_milestone5b.py checks the declaration against the
+ * renderer's stops so the two can never drift apart.
  */
 .legend-scale {
   gap: 9px;
@@ -307,6 +309,8 @@ strong {
   height: 9px;
   border-radius: 999px;
   box-shadow: inset 0 0 0 1px rgba(100, 116, 139, 0.18);
+  /* The renderer's five stops, red (negative) to purple (positive). */
+  background: linear-gradient(90deg, #b91c1c, #fdba74, #cbd5e1, #93c5fd, #6d28d9);
 }
 
 .scale-ticks {
@@ -505,6 +509,49 @@ strong {
   background: var(--panel);
   box-shadow: var(--shadow);
 }
+
+/*
+ * The replay timeline (Milestone 5B). The slider's values are checkpoint
+ * indices, so its handle moves one recorded checkpoint per step; the readout and
+ * the ticks underneath name the real optimiser steps those checkpoints recorded.
+ */
+
+.timeline {
+  display: grid;
+  gap: 6px;
+}
+
+.timeline-head {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline input[type="range"] {
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  accent-color: #1d4ed8;
+  cursor: pointer;
+}
+
+.timeline input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.timeline-ticks {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Footer controls ---------------------------------------------- */
 
 .controls {
   display: flex;
