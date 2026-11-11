@@ -151,6 +151,13 @@ Fast rate the page may skip visual frames when decoding cannot keep up, but the
 checkpoint on screen is always the one the elapsed-time clock points at, never a
 blend of two records.
 
+Chunks are read from `data/chunks/` as playback needs them: the checkpoint after the
+one on screen is always fetched, and at Fast the chunk after the current one is
+fetched as soon as playback enters it. A chunk stays on screen for 2.5 s at Fast but
+25 s at Normal and 500 s at Slow, while a cold 2.8 MB chunk takes about 2 s over a
+12 Mbit/s link, so only Fast (and a seek) can outrun its own downloads. Slow and
+Normal therefore still fetch a chunk only when they reach it.
+
 Like the live page, it must be served over HTTP rather than opened as a `file://`
 URL, because `replay.js` is an ES module and `fetch()` cannot read local files.
 
@@ -215,6 +222,29 @@ drives it: recorded values against the binary data, seeking and Previous/Next,
 Full vs. Partial mode, all three speeds, and a missing chunk. Without Playwright
 the browser checks print `SKIP` and the rest still run.
 
+## Measure playback smoothness
+
+`scripts/measure_fast_playback.py` is a diagnostic, not a test: it serves `docs/`
+over HTTP, throttles the browser's network and plays the recording twice in one
+browser context (cold, then warm from the HTTP cache). For each run it reports
+wall time, checkpoints actually drawn, every stall with its cause (network, main
+thread or mixed), every chunk request with its lead time, animation-frame gaps
+and long tasks.
+
+```bash
+./venv/bin/python scripts/measure_fast_playback.py
+./venv/bin/python scripts/measure_fast_playback.py --mbps 12 --latency 60 --speed fast
+./venv/bin/python scripts/measure_fast_playback.py --mbps 0 --speed normal --json run.json
+```
+
+`--mbps 0` disables throttling, `--speed` picks slow, normal or fast, `--stall-ms`
+sets what counts as a stall, `--json PATH` writes the raw measurements and
+`--site PATH` serves another directory instead of `docs/`. It needs Playwright
+with Chromium (`./venv/bin/python -m pip install playwright`, then
+`./venv/bin/python -m playwright install chromium`) and prints that instruction
+when the module is missing. It reads `docs/` and the recording only; the sole
+output file is the path given to `--json`.
+
 ## Files
 
 | File | Purpose |
@@ -236,6 +266,7 @@ the browser checks print `SKIP` and the rest still run.
 | `tests/test_milestone5a.py` | Recorder checks: record layout, sizes, manifest, fixed Partial indices, recorded values vs. PyTorch |
 | `tests/test_milestone5b.py` | Replay checks: page and ids, offline-only wiring, shared modules, colour scale, decoded checkpoints |
 | `scripts/build_pages.py` | Validates a recording and writes the publishable GitHub Pages site to `docs/` |
+| `scripts/measure_fast_playback.py` | Diagnostic: throttled browser playback of `docs/`, reporting stalls, chunk lead times and long tasks |
 | `docs/` | The published site: replay page, its modules, `.nojekyll` and `data/` (recording, chunks) |
 | `tests/test_milestone5c.py` | Static-site checks: reproducible build, published layout and sizes, HTTP from a nested path, browser replay |
 

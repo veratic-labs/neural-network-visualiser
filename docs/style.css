@@ -799,11 +799,18 @@ strong {
   font-size: 11px;
 }
 
+/* The fetch notice is shorter than the settled note, so without a reserved
+   height this box drops to one line while a chunk loads. The canvas below it
+   takes whatever height is left, so that one line change resizes the canvas and
+   forces a full redraw of every connection (≈200 ms at Fast speed). Two lines is
+   also the clamp, so the box keeps exactly the two lines it can ever show. */
 .replay #connection-note {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  min-height: 2.9em; /* two 1.45 line-heights, for browsers without lh */
+  min-height: 2lh;
 }
 
 .replay .sample-body {

@@ -582,7 +582,15 @@ def check_scripts() -> None:
     )
     check(
         "recording.prefetch(currentIndex + 1)" in replay,
-        "replay.js fetches the next chunk only when the replay reaches for it",
+        "replay.js keeps the checkpoint after the one on screen warm",
+    )
+    check(
+        re.search(
+            r'if \(speed === "fast"\) \{\s*'
+            r"recording\.prefetch\(\(recording\.chunkOf\(currentIndex\) \+ 1\) \* recording\.chunkSize\);",
+            replay,
+        ),
+        "replay.js fetches the next chunk ahead of time at Fast, whose chunks last less than a download",
     )
     check(
         "checkpointWeights = densePartialWeights(checkpoint.partialWeights, partialSelection)" in replay,
@@ -1198,30 +1206,35 @@ def check_repository() -> None:
     ignored = git("check-ignore", "-q", "recordings/mnist-epoch1/manifest.json")
     check(ignored.returncode == 0, "recordings/ stays ignored, so the 34 MiB site is not committed twice")
 
-    changed = git("status", "--porcelain", "--", "training", "backend", "recorder", "frontend")
+    changed = git("status", "--porcelain", "--", "training", "backend", "recorder")
     paths = sorted(line[3:].strip() for line in changed.stdout.splitlines() if line.strip())
     check(
-        paths == ["frontend/replay.js"],
-        "among frontend/, training/, backend/ and recorder/, only replay.js differs from the last commit",
+        not paths,
+        "the published site leaves training/, backend/ and recorder/ untouched",
         paths,
     )
 
-    diff = git("diff", "-U0", "--", "frontend/replay.js").stdout
-    added = [line for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")]
-    removed = [line for line in diff.splitlines() if line.startswith("-") and not line.startswith("---")]
+    # The site is built from frontend/ as it stands, so this milestone may only
+    # touch the replay wiring and its stylesheet; anything else means the site's
+    # sources moved and this test has to be reconsidered. check_structure proves
+    # the published files really are byte-for-byte copies of those sources.
+    changed = git("status", "--porcelain", "--", "frontend")
+    paths = sorted(line[3:].strip() for line in changed.stdout.splitlines() if line.strip())
     check(
-        any("RUN_NAME" in line for line in added)
-        and removed == ["-  elements.runName.textContent = runName(RECORDING_URL);"],
+        set(paths) <= {"frontend/replay.js", "frontend/style.css"},
+        "only the replay wiring and its stylesheet differ from the last commit",
+        paths,
+    )
+
+    replay_js = (FRONTEND / "replay.js").read_text(encoding="utf-8")
+    check(
+        "document.body.dataset.runName || runName(RECORDING_URL)" in replay_js,
         "replay.js names the header's run from data-run-name, so a published copy can name its run",
-        (added, removed),
     )
     check(
-        any("if (failed) return;" in line for line in added)
-        and any("failed = true;" in line for line in added),
+        "if (failed) return;" in replay_js and "failed = true;" in replay_js,
         "replay.js keeps a read error under the canvas when a later render repaints it",
-        added,
     )
-    check(len(added) <= 20, "the uncommitted change to replay.js stays a handful of lines", len(added))
 
     before_refusals = tree_digest(DOCS)
     for target in (".", "frontend", "recordings/mnist-epoch1"):

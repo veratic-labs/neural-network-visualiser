@@ -357,6 +357,14 @@ function applyCheckpoint(checkpoint) {
 
   // Playback always moves forward, so keep the next checkpoint warm.
   recording.prefetch(currentIndex + 1);
+
+  // A chunk only stays on screen for 2.5 s at Fast, which is less than a cold
+  // 2.8 MB chunk download on a slow link, so at Fast the chunk after the current
+  // one is fetched as soon as playback enters it. Slow and Normal keep their
+  // chunks for 500 s and 25 s, so they fetch a chunk only when it is reached.
+  if (speed === "fast") {
+    recording.prefetch((recording.chunkOf(currentIndex) + 1) * recording.chunkSize);
+  }
 }
 
 /**

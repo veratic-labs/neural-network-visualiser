@@ -246,6 +246,11 @@ def check_replay_script() -> None:
     check("No sample at Step 0" in script, "Step 0 is shown as the initial model with no sample")
     check("last recorded checkpoint" in script, "playback stops visibly at the end of the recording")
     check("prefetch(currentIndex + 1)" in script, "the next checkpoint is prefetched")
+    check(
+        'if (speed === "fast")' in script
+        and "recording.prefetch((recording.chunkOf(currentIndex) + 1) * recording.chunkSize)" in script,
+        "Fast fetches the next chunk ahead of time, because its chunks last less than a download",
+    )
     check("recording.partial.count" in script, "the Partial connection count comes from the manifest")
 
     check(
