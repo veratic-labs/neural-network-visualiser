@@ -45,6 +45,14 @@ import { Recording, RecordingError } from "./recording.js";
 const RECORDING_URL = document.body.dataset.recording || "../recordings/mnist-epoch1/";
 
 /**
+ * The recording's name for the header ("mnist-epoch1"). It normally comes from
+ * the recording URL, but a published copy stores the same files under `data/`,
+ * which says nothing about the run, so `scripts/build_pages.py` writes the
+ * directory name of the recording it copied into `data-run-name`.
+ */
+const RUN_NAME = document.body.dataset.runName || runName(RECORDING_URL);
+
+/**
  * How long one recorded checkpoint stays on screen, in milliseconds:
  *
  *   slow    1 checkpoint per second, for close observation
@@ -197,9 +205,16 @@ function densePartialWeights(partialWeights, selection) {
 
 /** The last connection description actually drawn, restored if a fetch is dropped. */
 let settledConnectionNote = "Loading the recorded network…";
+/** True once the recording could not be read; the error note then stays put. */
+let failed = false;
 
 /** Describes what the canvas is showing, including render timing. */
 function updateConnectionNote({ mode, connections, milliseconds, cached }) {
+  // A fatal error has the last word under the canvas. Layout changes can still
+  // trigger a render after `fail()`, and that render must not overwrite the one
+  // message the reader has to see.
+  if (failed) return;
+
   if (!recording) {
     settledConnectionNote = "Loading the recorded network…";
     elements.connectionNote.textContent = settledConnectionNote;
@@ -481,6 +496,7 @@ function setMode(mode) {
  * "something went wrong", and never a silently empty diagram.
  */
 function fail(error) {
+  failed = true;
   playing = false;
   if (playFrame) {
     window.cancelAnimationFrame(playFrame);
@@ -520,7 +536,7 @@ function fail(error) {
 async function start() {
   view = new NetworkView(elements.networkCanvas);
   view.onRender = updateConnectionNote;
-  elements.runName.textContent = runName(RECORDING_URL);
+  elements.runName.textContent = RUN_NAME;
   updateControls();
 
   setControlsNote(`Reading ${RECORDING_URL}manifest.json…`);

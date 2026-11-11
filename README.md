@@ -4,7 +4,7 @@ Real-time visualiser for the existing PyTorch MNIST MLP in `training/`
 (`784 → 128 → 64 → 10`, batch size 1). See `plan.md` for the full design and
 milestones.
 
-**Current state: Milestone 5B — recordings replay in the browser, offline.** The
+**Current state: Milestone 5C — the replay is published as a static site.** The
 live page (`index.html`) still trains and animates over its WebSocket, exactly as
 in Milestone 4. A second page, `frontend/replay.html`, plays back a recording
 written by the recorder: no backend, no socket, just the files in
@@ -162,6 +162,59 @@ This checks the page, the replay script, the shared modules, the colour scale, t
 recording's layout and decoded checkpoints, and that `training/` and `backend/`
 are untouched. It needs the recorder output, not a training run.
 
+## Publish the replay as a static site (GitHub Pages)
+
+Milestone 5C turns the replay into a self-contained site in `docs/`, which GitHub
+Pages can serve without a backend:
+
+```bash
+./venv/bin/python scripts/build_pages.py
+```
+
+The build validates the recording (manifest, record layout, file sizes, step
+list, Partial indices and the weight checksum), then writes:
+
+| Path | Contents |
+| --- | --- |
+| `docs/index.html` | `frontend/replay.html` with `data-recording="./data/"` and a note replacing the live-page link |
+| `docs/style.css`, `docs/network.js`, `docs/panels.js` | The shared frontend files, copied byte for byte |
+| `docs/replay.js`, `docs/recording.js` | The replay wiring and the recording reader, copied byte for byte |
+| `docs/data/manifest.json`, `docs/data/model.bin`, `docs/data/model-biases.bin`, `docs/data/partial-indices.bin` | The recording's manifest, initial weights, biases and Partial selection |
+| `docs/data/chunks/chunk-0000.bin` … `chunk-0012.bin` | All 6,001 records, 500 per chunk (about 34 MiB in total) |
+
+`.nojekyll` stops GitHub Pages from running Jekyll over the directory. Every URL
+in the page and the scripts is relative, so the site works at a project-site path
+such as `https://<user>.github.io/mlp-visualisation/`; the recording is read from
+`./data/` because the `<body>` carries `data-recording="./data/"` and
+`data-run-name="mnist-epoch1"`. Nothing outside `docs/` is fetched, so
+`training/`, `backend/`, `recordings/` and the virtualenv never need publishing.
+
+`--recording PATH` and `--output PATH` select another recording or another output
+directory; the build refuses to write into the repository root, `frontend/`,
+`training/`, `backend/`, `recorder/` or a recording.
+
+To inspect the site locally, serve the directory itself (it also works under a
+nested path, as on GitHub Pages):
+
+```bash
+./venv/bin/python -m http.server 8000 --directory docs
+```
+
+Then open <http://localhost:8000/>. To publish, commit `docs/` and select
+"Deploy from a branch" → `main` / `/docs` in the repository's Pages settings.
+
+```bash
+./venv/bin/python tests/test_milestone5c.py
+```
+
+The test rebuilds the site, checks that a second build is byte-identical, that
+`docs/` contains only the page and the recording, that every copied file matches
+its source, and that all 6,001 steps decode from `docs/data`. It then serves the
+page from a nested path over HTTP and, when Playwright's Chromium is available,
+drives it: recorded values against the binary data, seeking and Previous/Next,
+Full vs. Partial mode, all three speeds, and a missing chunk. Without Playwright
+the browser checks print `SKIP` and the rest still run.
+
 ## Files
 
 | File | Purpose |
@@ -182,6 +235,9 @@ are untouched. It needs the recorder output, not a training run.
 | `recorder/record_training.py` | Standalone recorder: trains one epoch and writes the binary recording plus manifest |
 | `tests/test_milestone5a.py` | Recorder checks: record layout, sizes, manifest, fixed Partial indices, recorded values vs. PyTorch |
 | `tests/test_milestone5b.py` | Replay checks: page and ids, offline-only wiring, shared modules, colour scale, decoded checkpoints |
+| `scripts/build_pages.py` | Validates a recording and writes the publishable GitHub Pages site to `docs/` |
+| `docs/` | The published site: replay page, its modules, `.nojekyll` and `data/` (recording, chunks) |
+| `tests/test_milestone5c.py` | Static-site checks: reproducible build, published layout and sizes, HTTP from a nested path, browser replay |
 
 `training/` is the existing PyTorch implementation. The only change made to it
 (for Milestone 2) is a `if __name__ == "__main__":` guard around its training
