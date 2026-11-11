@@ -142,6 +142,10 @@ export function updateLossMetric(elements, loss) {
  * completed optimiser steps. `label` names the mode, for example "training",
  * "paused" or "replay · checkpoint 1,235 / 6,001".
  *
+ * The epoch and step counters belong to the live page's metrics panel; the
+ * replay page shows only the progress bar, so those two are written only when
+ * the page provides them.
+ *
  * @param {object} elements page element map
  * @param {{ completed: number, total: number, epoch: number, epochs: number,
  *           label: string }} state
@@ -149,8 +153,10 @@ export function updateLossMetric(elements, loss) {
 export function renderProgressPanel(elements, { completed, total, epoch, epochs, label }) {
   const percent = total > 0 ? (completed / total) * 100 : 0;
 
-  elements.metricEpoch.textContent = `${formatNumber(epoch)} / ${formatNumber(epochs)}`;
-  elements.metricStep.textContent = `${formatNumber(completed)} / ${formatNumber(total)}`;
+  if (elements.metricEpoch) {
+    elements.metricEpoch.textContent = `${formatNumber(epoch)} / ${formatNumber(epochs)}`;
+    elements.metricStep.textContent = `${formatNumber(completed)} / ${formatNumber(total)}`;
+  }
 
   elements.progressFill.style.width = `${percent.toFixed(2)}%`;
   elements.progressText.textContent =

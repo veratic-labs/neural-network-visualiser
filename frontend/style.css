@@ -660,6 +660,351 @@ strong {
   font-size: 11px;
 }
 
+/* ==========================================================================
+   Replay page — compact desktop layout
+   ==========================================================================
+   The replay page has a fixed timeline and playback controls at the bottom of
+   the screen, so on a desktop the whole working set (network, sample, bars and
+   timeline) should be visible at once. Everything below is scoped to
+   `body.replay`; the live training page keeps its roomier layout.
+
+   The layout uses the viewport height rather than a fixed pixel height, so it
+   adapts to any desktop resolution. Below 1080px wide it falls back to normal
+   vertical scrolling, as on the live page. */
+
+.replay .app {
+  width: 100%;
+  max-width: none;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  gap: 10px;
+  /* Moderate side margins instead of a full-bleed page: about 5.5% of the window
+     on each side, capped so an ultrawide window does not turn into a narrow
+     column. The layout inside keeps its own 14px gutters; nothing else changes. */
+  padding: 10px clamp(44px, 5.5vw, 124px);
+}
+
+.replay .app-header {
+  gap: 6px 18px;
+}
+
+.replay .brand h1 {
+  font-size: clamp(20px, 1.55vw, 26px);
+}
+
+.replay .subtitle {
+  margin-top: 3px;
+  font-size: 14px;
+}
+
+.replay .badge {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+/* Two panels only, so the side board stays narrow: the network keeps the rest of
+   the width and the sample and bars still have room to breathe. */
+.replay .layout {
+  grid-template-columns: minmax(0, 1fr) clamp(380px, 26vw, 430px);
+  gap: 14px;
+  min-height: 0;
+}
+
+/* The side board holds the two panels that describe the checkpoint on screen:
+   the sample and its ten softmax bars. */
+.replay .side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* The sample keeps its natural height; the bars take everything that is left,
+   so the ten classes spread over the whole board instead of a fixed 2 × 5 grid. */
+.replay .panel-sample {
+  flex: 0 0 auto;
+}
+
+.replay .panel-outputs {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.replay .panel {
+  gap: 7px;
+  padding: 10px;
+  border-radius: 11px;
+}
+
+.replay .panel-head {
+  gap: 6px 8px;
+}
+
+.replay .panel-head h2 {
+  font-size: 13px;
+  letter-spacing: 0.05em;
+}
+
+.replay .hint {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.replay .tag {
+  padding: 2px 7px;
+  font-size: 11.5px;
+}
+
+.replay .panel-network {
+  min-height: 0;
+}
+
+.replay .canvas-wrap {
+  min-height: 0;
+}
+
+.replay .segmented {
+  padding: 3px;
+}
+
+.replay .segment {
+  padding: 6px 12px;
+  font-size: 13.5px;
+}
+
+.replay .legend {
+  gap: 5px 14px;
+  font-size: 13px;
+}
+
+.replay .legend-scale {
+  gap: 7px;
+}
+
+.replay .legend-scale-frame {
+  gap: 2px;
+}
+
+.replay .scale-bar,
+.replay .scale-ticks {
+  width: 170px;
+}
+
+.replay .scale-bar {
+  height: 8px;
+}
+
+.replay .scale-ticks {
+  font-size: 11px;
+}
+
+.replay #connection-note {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.replay .sample-body {
+  gap: 14px;
+}
+
+.replay .sample-frame {
+  padding: 5px;
+  border-radius: 9px;
+}
+
+.replay #sample-canvas {
+  width: 104px;
+  height: 104px;
+}
+
+.replay .facts {
+  gap: 5px;
+  font-size: 14px;
+}
+
+.replay .fact {
+  gap: 10px;
+}
+
+.replay .fact dd {
+  white-space: nowrap;
+}
+
+.replay .pill {
+  padding: 2px 8px;
+  font-size: 12.5px;
+}
+
+/* One class per row, top to bottom. The rows share the height the removed
+   metrics and recording panels used to fill, so each class keeps a wide track
+   and a line of its own. */
+.replay .panel-outputs .output-list {
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(10, minmax(0, 1fr));
+  grid-auto-flow: row;
+  gap: 5px;
+}
+
+.replay .output-row {
+  grid-template-columns: 18px minmax(0, 1fr) 52px;
+  gap: 9px;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.replay .output-track {
+  height: clamp(9px, 1.4vh, 16px);
+}
+
+/* Timeline full width; controls and progress share the next row, keeping the
+   transport controls and the timeline on screen without a second control row. */
+.replay .footer {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 30%);
+  grid-template-areas:
+    "timeline timeline"
+    "controls progress"
+    "note note";
+  gap: 8px 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+
+.replay .timeline {
+  grid-area: timeline;
+  gap: 3px;
+}
+
+.replay .timeline-head {
+  font-size: 13.5px;
+}
+
+.replay .timeline input[type="range"] {
+  height: 22px;
+}
+
+.replay .timeline-ticks {
+  font-size: 12px;
+}
+
+.replay .controls {
+  grid-area: controls;
+  gap: 7px 10px;
+}
+
+.replay .btn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.replay .speed {
+  gap: 7px;
+  font-size: 14px;
+}
+
+.replay .speed select {
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.replay .controls-note {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.replay .progress {
+  grid-area: progress;
+  gap: 3px;
+  align-self: center;
+}
+
+.replay .progress-head {
+  font-size: 13px;
+}
+
+.replay .progress-track {
+  height: 10px;
+}
+
+.replay .app-note {
+  grid-area: note;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  padding-top: 5px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* On a 1080p desktop the sample panel has room for the larger image. */
+@media (min-width: 1081px) and (min-height: 1080px) {
+  .replay #sample-canvas {
+    width: 128px;
+    height: 128px;
+  }
+}
+
+/* Below 1080p the same two panels keep their place, with a smaller sample so
+   the ten bars still fit beside the network and above the timeline. */
+@media (min-width: 1081px) and (max-height: 1079px) {
+  .replay .app {
+    gap: 6px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .replay .side {
+    gap: 6px;
+  }
+
+  .replay .sample-body {
+    gap: 12px;
+  }
+
+  .replay #sample-canvas {
+    width: 88px;
+    height: 88px;
+  }
+
+  .replay .app-note {
+    display: none;
+  }
+}
+
+/* Very short desktop windows cannot keep the full working set on one screen
+   without shrinking the type. Let the page scroll normally there instead of
+   hiding panel text behind an internal scroll area. */
+@media (min-width: 1081px) and (max-height: 760px) {
+  .replay .app {
+    height: auto;
+    min-height: 100vh;
+    padding-top: 10px;
+    padding-bottom: 12px;
+  }
+
+  .replay .side {
+    overflow: visible;
+  }
+
+  .replay .panel-network {
+    min-height: 480px;
+  }
+
+  .replay .canvas-wrap {
+    min-height: 380px;
+  }
+}
+
 /* ---------- Responsive ---------------------------------------------------- */
 
 @media (max-width: 1080px) {
@@ -675,6 +1020,59 @@ strong {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     align-items: start;
+  }
+
+  /* The replay page keeps its compact panels but returns to a normal scrolling
+     page once there is no longer room for the network and the side column. */
+  .replay .app {
+    height: auto;
+    min-height: 100vh;
+    gap: 12px;
+    padding: 14px 12px 18px;
+  }
+
+  .replay .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .replay .panel-network {
+    min-height: 420px;
+  }
+
+  .replay .canvas-wrap {
+    min-height: 360px;
+  }
+
+  .replay .side {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  /* On a scrolling page there is no spare height to share, so the ten bars keep
+     their natural row height. */
+  .replay .panel-outputs .output-list {
+    flex: 0 0 auto;
+  }
+
+  .replay .footer {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "timeline"
+      "controls"
+      "progress"
+      "note";
+  }
+
+  .replay .controls-note {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .replay .app-note {
+    display: block;
+    overflow: visible;
+    -webkit-line-clamp: unset;
   }
 }
 
@@ -702,6 +1100,14 @@ strong {
 
   .controls-note {
     flex-basis: 100%;
+  }
+
+  .replay .panel-network {
+    min-height: 380px;
+  }
+
+  .replay .canvas-wrap {
+    min-height: 300px;
   }
 }
 

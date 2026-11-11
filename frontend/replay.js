@@ -4,15 +4,21 @@
  * This page shows a recorded run instead of a live one. It reads the static
  * files of one recording directory through `recording.js` (manifest, initial
  * weights, biases, fixed Partial indices, checkpoint chunks), draws the network
- * with the same `NetworkView` as `main.js`, and writes the image, facts, bars,
- * metrics and progress with the same `panels.js`. Nothing draws twice and
+ * with the same `NetworkView` as `main.js`, and writes the image, facts, bars
+ * and progress with the same `panels.js`. Nothing draws twice and
  * nothing here trains, sends or invents a value.
  *
  * One rule runs through the whole file: the checkpoint on screen is always a
  * recorded one. The timeline holds checkpoint indices, Previous and Next move by
- * exactly one checkpoint, playback advances by one checkpoint per tick, and a
- * decode that returns a different step than the manifest promised is treated as
- * an error rather than drawn. Values are never interpolated, smoothed or scaled.
+ * exactly one checkpoint, and a decode that returns a different step than the
+ * manifest promised is treated as an error rather than drawn. Values are never
+ * interpolated, smoothed or scaled.
+ *
+ * Playback is driven by elapsed time, not by a chain of timers. On every
+ * animation frame the clock says which checkpoint *should* be visible, and at
+ * most that one recorded checkpoint is decoded and drawn. At the fast rate the
+ * clock advances several checkpoints per frame, so intermediate visual frames
+ * are skipped while the displayed checkpoint and the timeline stay in step.
  *
  * Capture convention (plan.md section 7.3): the image, prediction,
  * probabilities, activations and loss of a checkpoint come from the forward pass
@@ -26,7 +32,6 @@ import {
   formatNumber,
   renderProgressPanel,
   setStatus,
-  updateLossMetric,
   updateOutputRows,
   updateSamplePanel,
 } from "./panels.js";
@@ -40,17 +45,22 @@ import { Recording, RecordingError } from "./recording.js";
 const RECORDING_URL = document.body.dataset.recording || "../recordings/mnist-epoch1/";
 
 /**
- * How long one recorded checkpoint stays on screen, in milliseconds. A speed
- * setting changes only this dwell time: never the checkpoints, their order, the
- * step labels or any value.
+ * How long one recorded checkpoint stays on screen, in milliseconds:
+ *
+ *   slow    1 checkpoint per second, for close observation
+ *   normal 20 checkpoints per second (about five minutes for this recording)
+ *   fast   one checkpoint every 5 ms (about thirty seconds for this recording)
+ *
+ * A speed setting changes only this dwell time: never the checkpoints, their
+ * order, the step labels or any value. At fast speed the animation frame rate
+ * is lower than the checkpoint rate, so frames are skipped, never interpolated.
  */
-const SPEEDS = Object.freeze({ slow: 1000, normal: 400, fast: 120 });
+const SPEEDS = Object.freeze({ slow: 1000, normal: 50, fast: 5 });
 
 const elements = {
   architectureSummary: document.getElementById("architecture-summary"),
   runName: document.getElementById("run-name"),
   statusBadge: document.getElementById("status-badge"),
-  modelBadge: document.getElementById("model-badge"),
   networkCanvas: document.getElementById("network-canvas"),
   connectionNote: document.getElementById("connection-note"),
   modeAll: document.getElementById("mode-all"),
@@ -62,13 +72,6 @@ const elements = {
   samplePredicted: document.getElementById("sample-predicted"),
   sampleVerdict: document.getElementById("sample-verdict"),
   outputList: document.getElementById("output-list"),
-  metricLoss: document.getElementById("metric-loss"),
-  metricEpoch: document.getElementById("metric-epoch"),
-  metricStep: document.getElementById("metric-step"),
-  recordingCheckpoints: document.getElementById("recording-checkpoints"),
-  recordingSteps: document.getElementById("recording-steps"),
-  recordingCadence: document.getElementById("recording-cadence"),
-  dataNote: document.getElementById("data-note"),
   timeline: document.getElementById("timeline"),
   timelineReadout: document.getElementById("timeline-readout"),
   timelineFirst: document.getElementById("timeline-first"),
@@ -103,7 +106,15 @@ let currentIndex = null;
 /** Bumped on every seek so a slow fetch can never overwrite a newer selection. */
 let seekToken = 0;
 let playing = false;
-let playTimer = 0;
+/** The pending animation frame of the playback clock, or 0 when paused. */
+let playFrame = 0;
+/** Checkpoint index and time the elapsed-time playback clock is measured from. */
+let playAnchorIndex = 0;
+let playAnchorTime = 0;
+/** True while the checkpoint for the previous animation frame is being drawn. */
+let renderBusy = false;
+/** Identifies the newest playback render, so a late one cannot release the lock. */
+let renderToken = 0;
 let speed = "normal";
 
 /** Index of the last recorded checkpoint. */
@@ -184,27 +195,33 @@ function densePartialWeights(partialWeights, selection) {
   return matrices;
 }
 
+/** The last connection description actually drawn, restored if a fetch is dropped. */
+let settledConnectionNote = "Loading the recorded network…";
+
 /** Describes what the canvas is showing, including render timing. */
 function updateConnectionNote({ mode, connections, milliseconds, cached }) {
   if (!recording) {
-    elements.connectionNote.textContent = "Loading the recorded network…";
+    settledConnectionNote = "Loading the recorded network…";
+    elements.connectionNote.textContent = settledConnectionNote;
     return;
   }
 
   const ms = `${Math.round(milliseconds)} ms`;
   if (mode === "partial") {
-    elements.connectionNote.textContent =
+    settledConnectionNote =
       `Partial mode: the same ${formatNumber(recording.partial.count)} connections recorded at ` +
       `Step 0, recoloured from the selected checkpoint's own weights (${formatNumber(connections)} ` +
       `lines drawn in ${ms}) on the fixed ±${MAX_DISPLAY_WEIGHT} scale. The selection never changes.`;
+    elements.connectionNote.textContent = settledConnectionNote;
     return;
   }
 
-  elements.connectionNote.textContent =
+  settledConnectionNote =
     `All ${formatNumber(view.totalConnections)} connections from the Step 0 initial weights ` +
     `(${ms}${cached ? ", cached" : ""}), on the same fixed ±${MAX_DISPLAY_WEIGHT} scale. ` +
     `Later full-network weights were not recorded, so this view stays still; Partial mode follows ` +
     `the selected checkpoint.`;
+  elements.connectionNote.textContent = settledConnectionNote;
 }
 
 /** Enables exactly the controls that can act from the current position. */
@@ -221,12 +238,32 @@ function updateControls() {
   elements.speedSelect.disabled = !ready;
 }
 
+/** The dwell time of the selected speed, in milliseconds. */
+function dwellTime() {
+  return SPEEDS[speed] || SPEEDS.normal;
+}
+
+/**
+ * The checkpoint the elapsed-time playback clock points at, given an animation
+ * frame timestamp. This is the only place playback decides where it is: pausing,
+ * seeking or changing speed simply moves the anchor, so the clock never drifts.
+ */
+function playbackTarget(now) {
+  const elapsed = Math.max(0, now - playAnchorTime);
+  return Math.min(lastIndex(), playAnchorIndex + Math.floor(elapsed / dwellTime()));
+}
+
 /** The one-line state under the controls. */
 function describeState(step, index) {
   const position =
     `step ${formatNumber(step)} · checkpoint ${formatNumber(index + 1)} of ` +
     `${formatNumber(recording.checkpointCount)}`;
-  if (playing) return `Playing · one recorded checkpoint every ${SPEEDS[speed]} ms · ${position}`;
+  if (playing) {
+    const perSecond = Math.round(1000 / dwellTime());
+    const unit = perSecond === 1 ? "checkpoint" : "checkpoints";
+    const skip = perSecond > 60 ? " · visual frames skipped as needed" : "";
+    return `Playing · ${formatNumber(perSecond)} ${unit} per second${skip} · ${position}`;
+  }
   if (index === 0) return `Initial model · ${position} · press Play or Next to advance`;
   return (
     `Paused at ${position} · Previous and Next move one recorded checkpoint ` +
@@ -234,9 +271,15 @@ function describeState(step, index) {
   );
 }
 
+/** Writes the controls note and keeps the full text available as a tooltip. */
+function setControlsNote(text) {
+  elements.controlsNote.textContent = text;
+  elements.controlsNote.title = text;
+}
+
 /**
  * Puts one recorded checkpoint on screen: the network, the sample, the ten bars,
- * the loss, the timeline and the progress bar. Every value comes from the
+ * the timeline and the progress bar. Every value comes from the
  * checkpoint itself; nothing is derived beyond the shape conversions above.
  */
 function applyCheckpoint(checkpoint) {
@@ -267,7 +310,7 @@ function applyCheckpoint(checkpoint) {
     trueLabel: hasSample ? checkpoint.trueLabel : null,
     predictedLabel: hasSample ? checkpoint.predictedLabel : null,
     correct: hasSample ? checkpoint.predictedLabel === checkpoint.trueLabel : null,
-    verdict: "No sample at Step 0 · the recording captured its first forward pass at the next checkpoint",
+    verdict: "No sample at Step 0",
   });
   elements.sampleStep.textContent = `step ${formatNumber(checkpoint.step)}`;
 
@@ -276,7 +319,6 @@ function applyCheckpoint(checkpoint) {
     trueLabel: hasSample ? checkpoint.trueLabel : -1,
     predictedLabel: hasSample ? checkpoint.predictedLabel : -1,
   });
-  updateLossMetric(elements, hasSample ? checkpoint.loss : null);
 
   const step = checkpoint.step;
   const epoch = Math.min(recording.epochs, Math.ceil(step / recording.trainSamples));
@@ -294,7 +336,7 @@ function applyCheckpoint(checkpoint) {
   elements.timeline.value = String(currentIndex);
   elements.timeline.setAttribute("aria-valuetext", `step ${formatNumber(step)}`);
   elements.timelineReadout.textContent = `step ${formatNumber(step)}`;
-  elements.controlsNote.textContent = describeState(step, currentIndex);
+  setControlsNote(describeState(step, currentIndex));
   setStatus(elements, `Replay · step ${formatNumber(step)}`, "ready");
   updateControls();
 
@@ -340,43 +382,77 @@ async function showCheckpoint(index) {
   }
 }
 
-/** Starts stepping forward through the recording, one checkpoint per tick. */
+/**
+ * Starts the elapsed-time playback clock from the checkpoint on screen. The
+ * clock is re-anchored whenever playback starts, resumes or changes speed, so
+ * pause and resume cannot accumulate drift.
+ */
 function play() {
   if (!recording || playing || currentIndex === null) return;
   if (currentIndex >= lastIndex()) return;
 
   playing = true;
+  playAnchorIndex = currentIndex;
+  playAnchorTime = performance.now();
   updateControls();
-  elements.controlsNote.textContent = describeState(recording.stepOf(currentIndex), currentIndex);
-  scheduleNext();
+  setControlsNote(describeState(recording.stepOf(currentIndex), currentIndex));
+  playFrame = window.requestAnimationFrame(playbackFrame);
 }
 
-/** Queues the next checkpoint at the current speed. */
-function scheduleNext() {
-  window.clearTimeout(playTimer);
-  if (!playing) return;
+/**
+ * One playback animation frame. The elapsed-time clock decides which recorded
+ * checkpoint should be on screen; if it is ahead of the current one, that exact
+ * checkpoint is decoded and drawn. Only one decode is in flight at a time, so at
+ * the fast rate the clock may pass several checkpoints while a frame is being
+ * drawn and the next frame simply picks up the newest one. No intermediate value
+ * is ever invented.
+ */
+function playbackFrame(now) {
+  if (!playing || !recording) return;
 
-  playTimer = window.setTimeout(async () => {
-    if (!playing) return;
-    if (currentIndex >= lastIndex()) {
-      pause(`Reached the last recorded checkpoint (step ${formatNumber(recording.lastStep)}).`);
-      return;
-    }
-    await showCheckpoint(currentIndex + 1);
-    if (playing) scheduleNext();
-  }, SPEEDS[speed] || SPEEDS.normal);
+  const target = playbackTarget(now);
+  if (target > currentIndex && !renderBusy) {
+    renderBusy = true;
+    const token = ++renderToken;
+    void showCheckpoint(target).finally(() => {
+      if (token === renderToken) renderBusy = false;
+    });
+  }
+
+  if (!playing) return;
+  if (!renderBusy && currentIndex >= lastIndex() && target >= lastIndex()) {
+    pause(`Reached the last recorded checkpoint (step ${formatNumber(recording.lastStep)}).`);
+    return;
+  }
+
+  playFrame = window.requestAnimationFrame(playbackFrame);
 }
 
 /** Stops playback without moving; the current checkpoint stays on screen. */
 function pause(message = "") {
+  const wasPlaying = playing;
   playing = false;
-  window.clearTimeout(playTimer);
+
+  if (playFrame) {
+    window.cancelAnimationFrame(playFrame);
+    playFrame = 0;
+  }
+
+  if (wasPlaying) {
+    // Drop a checkpoint that a slow chunk is still fetching. Resuming must
+    // continue from what is visible now, not jump to where the old clock was.
+    if (renderBusy) elements.connectionNote.textContent = settledConnectionNote;
+    seekToken += 1;
+    renderToken += 1;
+    renderBusy = false;
+  }
+
   if (!recording) return;
 
   if (message) {
-    elements.controlsNote.textContent = message;
+    setControlsNote(message);
   } else if (currentIndex !== null) {
-    elements.controlsNote.textContent = describeState(recording.stepOf(currentIndex), currentIndex);
+    setControlsNote(describeState(recording.stepOf(currentIndex), currentIndex));
   }
   updateControls();
 }
@@ -406,15 +482,28 @@ function setMode(mode) {
  */
 function fail(error) {
   playing = false;
-  window.clearTimeout(playTimer);
+  if (playFrame) {
+    window.cancelAnimationFrame(playFrame);
+    playFrame = 0;
+  }
+  seekToken += 1;
+  renderToken += 1;
+  if (renderBusy) elements.connectionNote.textContent = settledConnectionNote;
+  renderBusy = false;
 
   const message = error instanceof RecordingError ? error.message : `${(error && error.message) || error}`;
   console.error("replay stopped:", error);
 
   setStatus(elements, "Replay data error", "error");
-  elements.dataNote.textContent = `Could not read the recording: ${message}`;
-  elements.controlsNote.textContent =
-    "Replay is unavailable until the recorded files can be read. Reload the page to try again.";
+  // Nothing is on the page to describe the failure any more, so the message goes
+  // where it cannot be missed: under the canvas and under the controls. The
+  // controls note keeps the full text as its tooltip when it is clipped.
+  settledConnectionNote = `Could not read the recording: ${message}`;
+  elements.connectionNote.textContent = settledConnectionNote;
+  setControlsNote(
+    `Could not read the recording: ${message} — replay is unavailable until the ` +
+      "recorded files can be read. Reload the page to try again.",
+  );
   elements.timeline.disabled = true;
   elements.play.disabled = true;
   elements.pause.disabled = true;
@@ -432,10 +521,9 @@ async function start() {
   view = new NetworkView(elements.networkCanvas);
   view.onRender = updateConnectionNote;
   elements.runName.textContent = runName(RECORDING_URL);
-  elements.modelBadge.textContent = "Replay";
   updateControls();
 
-  elements.dataNote.textContent = `Reading ${RECORDING_URL}manifest.json…`;
+  setControlsNote(`Reading ${RECORDING_URL}manifest.json…`);
   try {
     recording = await Recording.open(RECORDING_URL);
   } catch (error) {
@@ -446,18 +534,15 @@ async function start() {
   elements.architectureSummary.textContent = recording.architecture
     .map((layer) => formatNumber(layer.size))
     .join(" → ");
-  elements.recordingCheckpoints.textContent = formatNumber(recording.checkpointCount);
-  elements.recordingSteps.textContent =
-    `${formatNumber(recording.firstStep)} – ${formatNumber(recording.lastStep)} ` +
-    `of ${formatNumber(recording.totalSteps)}`;
-  elements.recordingCadence.textContent =
-    recording.cadence === 1 ? "every step" : `every ${formatNumber(recording.cadence)} steps`;
-  elements.dataNote.textContent =
+  setControlsNote(
     "Manifest read and validated. Loading the initial weights, the biases and the " +
-    "fixed Partial indices…";
+      "fixed Partial indices…",
+  );
 
   try {
-    const [weights, biases, selection] = await Promise.all([
+    // The biases are still read so a corrupt recording fails loudly here, even
+    // though the panels no longer print their count.
+    const [weights, , selection] = await Promise.all([
       recording.loadInitialWeights(),
       recording.loadBiases(),
       recording.loadPartialSelection(),
@@ -470,15 +555,6 @@ async function start() {
       weights: initialWeights,
       selection: partialSelection,
     });
-
-    const biasCount = biases.reduce((total, values) => total + values.length, 0);
-    const cadence =
-      recording.cadence === 1 ? "every step" : `every ${formatNumber(recording.cadence)} steps`;
-    elements.dataNote.textContent =
-      `${formatNumber(recording.connectionCount)} initial weights, ${formatNumber(biasCount)} ` +
-      `biases and ${formatNumber(recording.partial.count)} fixed Partial connections were read ` +
-      `from ${RECORDING_URL} together with ${formatNumber(recording.checkpointCount)} checkpoints ` +
-      `(${cadence}).`;
   } catch (error) {
     fail(error);
     return;
@@ -529,9 +605,15 @@ elements.speedSelect.addEventListener("change", () => {
   speed = SPEEDS[elements.speedSelect.value] ? elements.speedSelect.value : "normal";
   if (!playing || currentIndex === null) return;
 
-  // Restart the pending tick so the new dwell time applies from now on.
-  scheduleNext();
-  elements.controlsNote.textContent = describeState(recording.stepOf(currentIndex), currentIndex);
+  // Re-anchor the clock at the checkpoint on screen: the new rate starts now,
+  // with no jump and no backlog of requests made at the old rate.
+  if (renderBusy) elements.connectionNote.textContent = settledConnectionNote;
+  seekToken += 1;
+  renderToken += 1;
+  renderBusy = false;
+  playAnchorIndex = currentIndex;
+  playAnchorTime = performance.now();
+  setControlsNote(describeState(recording.stepOf(currentIndex), currentIndex));
 });
 
 // `NetworkView` observes its own container, so no resize handler is needed here.

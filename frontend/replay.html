@@ -11,7 +11,7 @@
     works under a subdirectory such as GitHub Pages. `replay.js` reads the
     attribute and fetches every file below it; nothing else is contacted.
   -->
-  <body data-recording="../recordings/mnist-epoch1/">
+  <body class="replay" data-recording="../recordings/mnist-epoch1/">
     <div class="app">
       <header class="app-header">
         <div class="brand">
@@ -24,7 +24,6 @@
         </div>
         <div class="badges">
           <span class="badge badge-status" id="status-badge">Loading recording…</span>
-          <span class="badge badge-model" id="model-badge">Replay</span>
         </div>
       </header>
 
@@ -75,7 +74,7 @@
         </section>
 
         <aside class="side">
-          <section class="panel" aria-labelledby="sample-heading">
+          <section class="panel panel-sample" aria-labelledby="sample-heading">
             <div class="panel-head">
               <h2 id="sample-heading">Current sample</h2>
               <span class="tag tag-live" id="sample-step">step –</span>
@@ -94,48 +93,18 @@
               </dl>
             </div>
             <p class="hint">
-              The image, prediction, probabilities, activations and loss were captured
-              <strong>before</strong> that step's optimiser update; the Partial weights shown were read
-              <strong>after</strong> it. Step 0 is the initial model: no sample and no optimiser step.
+              Captured <strong>before</strong> that step's optimiser update; the Partial weights were
+              read <strong>after</strong> it. Step 0 is the initial model: no sample, no update.
             </p>
           </section>
 
-          <section class="panel" aria-labelledby="outputs-heading">
+          <section class="panel panel-outputs" aria-labelledby="outputs-heading">
             <div class="panel-head">
               <h2 id="outputs-heading">Class probabilities</h2>
               <span class="tag tag-live">softmax</span>
             </div>
             <div class="output-list" id="output-list"></div>
             <p class="hint">Filled bar = predicted class · outlined label = true class.</p>
-          </section>
-
-          <section class="panel" aria-labelledby="metrics-heading">
-            <div class="panel-head">
-              <h2 id="metrics-heading">Training metrics</h2>
-              <span class="tag tag-live">recorded</span>
-            </div>
-            <dl class="metrics">
-              <div class="metric"><dt>Loss</dt><dd id="metric-loss">–</dd></div>
-              <div class="metric"><dt>Epoch</dt><dd id="metric-epoch">–</dd></div>
-              <div class="metric"><dt>Step</dt><dd id="metric-step">–</dd></div>
-            </dl>
-            <p class="hint">
-              Loss is the recorded cross-entropy of the sample that step trained on, captured before
-              its optimiser update. Epoch and step are the recorded optimiser steps, never estimates.
-            </p>
-          </section>
-
-          <section class="panel" aria-labelledby="recording-heading">
-            <div class="panel-head">
-              <h2 id="recording-heading">Recording</h2>
-              <span class="tag tag-live">offline</span>
-            </div>
-            <dl class="facts">
-              <div class="fact"><dt>Checkpoints</dt><dd id="recording-checkpoints">–</dd></div>
-              <div class="fact"><dt>Steps</dt><dd id="recording-steps">–</dd></div>
-              <div class="fact"><dt>Cadence</dt><dd id="recording-cadence">–</dd></div>
-            </dl>
-            <p class="hint" id="data-note" role="status">Fetching the recording manifest…</p>
           </section>
         </aside>
       </main>
@@ -172,9 +141,9 @@
           <label class="speed">
             <span>Speed</span>
             <select id="speed-select" disabled>
-              <option value="slow">Slow (observe)</option>
-              <option value="normal" selected>Normal</option>
-              <option value="fast">Fast</option>
+              <option value="slow">Slow (1 checkpoint/s)</option>
+              <option value="normal" selected>Normal (20 checkpoints/s)</option>
+              <option value="fast">Fast (≈200 checkpoints/s)</option>
             </select>
           </label>
           <span class="controls-note" id="controls-note">

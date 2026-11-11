@@ -138,15 +138,18 @@ Controls:
 
 | Control | Effect |
 | --- | --- |
-| Play / Pause | Advances one recorded checkpoint at a time and stops when the last one is shown |
+| Play / Pause | Advances through the recorded checkpoints and stops when the last one is shown |
 | Previous / Next | Moves exactly one checkpoint; a manual move pauses playback |
-| Speed | Slow, normal and fast playback rates; changing it while playing takes effect immediately |
+| Speed | Slow (1/s), Normal (20/s) or Fast (≈200/s, the whole recording in about 30 s); changing it while playing takes effect immediately |
 | Timeline | Scrubs over checkpoint indices; the readout shows the recorded optimiser step |
 | Full / Partial | Full draws `model.bin`, Partial draws the recorded 1,010 weights |
 
 Step 0 is the initial model and has no sample, so the sample panel says so; every
 later checkpoint shows its recorded image, prediction, probabilities, loss and
-activations. Nothing is interpolated: each frame is one complete record.
+activations. Nothing is interpolated: each frame is one complete record. At the
+Fast rate the page may skip visual frames when decoding cannot keep up, but the
+checkpoint on screen is always the one the elapsed-time clock points at, never a
+blend of two records.
 
 Like the live page, it must be served over HTTP rather than opened as a `file://`
 URL, because `replay.js` is an ES module and `fetch()` cannot read local files.
