@@ -4,10 +4,9 @@ Real-time visualiser for the existing PyTorch MNIST MLP in `training/`
 (`784 → 128 → 64 → 10`, batch size 1). See `plan.md` for the full design and
 milestones.
 
-**Current state: Milestone 5C — the replay is published as a static site.** The
-live page (`index.html`) still trains and animates over its WebSocket, exactly as
-in Milestone 4. A second page, `frontend/replay.html`, plays back a recording
-written by the recorder: no backend, no socket, just the files in
+**Current state: Cleanup 3 — the replay is published as a static site, and the
+Live Training app is gone.** A recording written by the recorder is replayed by
+`frontend/replay.html`: no server-side application, no socket, just the files in
 `recordings/`. Play, Pause, Previous, Next, a speed selector and a timeline move
 between the recorded checkpoints, and the same canvas renderer draws them. A
 checkpoint is shown exactly as it was recorded — there is no interpolation or
@@ -15,57 +14,21 @@ smoothing between snapshots.
 
 Full mode draws the 109,184 initial weights from `model.bin`; Partial mode draws
 the 1,010 connections each checkpoint actually recorded, scattered back onto the
-same fixed selection the live page uses. The recorded sample, probabilities, loss
+same fixed selection every frame shares. The recorded sample, probabilities, loss
 and activations are shown for every checkpoint that has one.
 
-## Run the application
+## Run it
 
-Everything is served by the backend, so one process is enough. From the
-repository root, using the project virtualenv:
+The project has two halves, and neither needs a Python server:
 
-```bash
-./venv/bin/python -m backend.server
-```
+* **Record** a training run once, offline, into a directory of binary files —
+  see [Record a training run](#record-a-training-run-offline).
+* **Replay** that recording in the browser — from `frontend/replay.html` against
+  `recordings/`, or from the published copy in `docs/`.
 
-Then open <http://localhost:8000>.
-
-The backend loads `training/training.py` (its network only — the training loop
-stays behind a `__main__` guard), sends the model to the browser on connect,
-followed by one `inference` message per sample, and serves `frontend/` as static
-files. A forward pass runs inside `torch.no_grad()` and never touches the
-optimiser, so the weights cannot change.
-
-### WSL2 + Windows browser
-
-* Uvicorn binds to `127.0.0.1`, and WSL2 forwards that to Windows, so
-  <http://localhost:8000> works directly in Edge/Chrome.
-* If localhost forwarding is unavailable, bind to all interfaces and use the WSL
-  address (`hostname -I`):
-
-  ```bash
-  VISUALISER_HOST=0.0.0.0 VISUALISER_PORT=8000 ./venv/bin/python -m backend.server
-  ```
-
-  then open `http://<wsl-ip>:8000`. The binding is configurable through the
-  `VISUALISER_HOST` / `VISUALISER_PORT` environment variables.
-
-The page must be served over HTTP, not opened as a `file://` URL, because
-`main.js` is loaded as an ES module and the WebSocket URL is derived from
-`window.location`.
-
-### Check that it works
-
-```bash
-./venv/bin/python tests/test_milestone2.py
-./venv/bin/python tests/test_milestone3.py
-```
-
-Each script starts its own server (ports 8123 and 8124), verifies the messages
-the browser receives, and shuts the server down again. Milestone 2 checks that
-the transmitted weights are the model's real tensors. Milestone 3 checks that
-the sample is a real MNIST image, that the logits, softmax, prediction, loss and
-activations are reproducible from the transmitted weights and pixels, and that
-`next_sample` returns the next image without changing a single weight.
+The replay page is static: it needs a plain file server and nothing else, which
+is why the copy in `docs/` can be hosted on GitHub Pages. The sections below
+cover each half, the tests that verify them and the recording format.
 
 ## Record a training run (offline)
 
@@ -121,9 +84,9 @@ PyTorch actually produced.
 
 ## Replay a recording in the browser (offline)
 
-`frontend/replay.html` plays a recording back without the backend. It only needs
-a static file server that serves the repository root, so that the page can read
-`recordings/` through `../recordings/…`:
+`frontend/replay.html` plays a recording back with a static file server and
+nothing else. It only needs a server that serves the repository root, so that the
+page can read `recordings/` through `../recordings/…`:
 
 ```bash
 ./venv/bin/python -m http.server 8000 --bind 127.0.0.1
@@ -158,16 +121,16 @@ fetched as soon as playback enters it. A chunk stays on screen for 2.5 s at Fast
 12 Mbit/s link, so only Fast (and a seek) can outrun its own downloads. Slow and
 Normal therefore still fetch a chunk only when they reach it.
 
-Like the live page, it must be served over HTTP rather than opened as a `file://`
-URL, because `replay.js` is an ES module and `fetch()` cannot read local files.
+It must be served over HTTP rather than opened as a `file://` URL, because
+`replay.js` is an ES module and `fetch()` cannot read local files.
 
 ```bash
 ./venv/bin/python tests/test_milestone5b.py
 ```
 
 This checks the page, the replay script, the shared modules, the colour scale, the
-recording's layout and decoded checkpoints, and that `training/` and `backend/`
-are untouched. It needs the recorder output, not a training run.
+recording's layout and decoded checkpoints, and that `training/` is untouched. It
+needs the recorder output, not a training run.
 
 ## Publish the replay as a static site (GitHub Pages)
 
@@ -183,7 +146,7 @@ list, Partial indices and the weight checksum), then writes:
 
 | Path | Contents |
 | --- | --- |
-| `docs/index.html` | `frontend/replay.html` with `data-recording="./data/"` and a note replacing the live-page link |
+| `docs/index.html` | `frontend/replay.html` with only its `data-recording` path changed to `./data/` |
 | `docs/style.css`, `docs/network.js`, `docs/panels.js` | The shared frontend files, copied byte for byte |
 | `docs/replay.js`, `docs/recording.js` | The replay wiring and the recording reader, copied byte for byte |
 | `docs/data/manifest.json`, `docs/data/model.bin`, `docs/data/model-biases.bin`, `docs/data/partial-indices.bin` | The recording's manifest, initial weights, biases and Partial selection |
@@ -194,11 +157,11 @@ in the page and the scripts is relative, so the site works at a project-site pat
 such as `https://<user>.github.io/mlp-visualisation/`; the recording is read from
 `./data/` because the `<body>` carries `data-recording="./data/"` and
 `data-run-name="mnist-epoch1"`. Nothing outside `docs/` is fetched, so
-`training/`, `backend/`, `recordings/` and the virtualenv never need publishing.
+`training/`, `recordings/` and the virtualenv never need publishing.
 
 `--recording PATH` and `--output PATH` select another recording or another output
 directory; the build refuses to write into the repository root, `frontend/`,
-`training/`, `backend/`, `recorder/` or a recording.
+`training/`, `recorder/` or a recording.
 
 To inspect the site locally, serve the directory itself (it also works under a
 nested path, as on GitHub Pages):
@@ -249,20 +212,14 @@ output file is the path given to `--json`.
 
 | File | Purpose |
 | --- | --- |
-| `frontend/index.html` | Page layout: network view, sample / probability / metric panels, Next sample button, controls, progress bar |
 | `frontend/style.css` | Styling and responsive layout |
 | `frontend/network.js` | Canvas renderer for neurons, connections (full and partial modes) and activations |
-| `frontend/panels.js` | Panel rendering shared by the live page and the replay page |
-| `frontend/main.js` | WebSocket client, panel rendering and UI wiring |
+| `frontend/panels.js` | Panel rendering shared by the replay page's modules |
 | `frontend/recording.js` | Reads a recording from `recordings/`: manifest, initial model, Partial selection, checkpoints |
-| `frontend/replay.html` | Offline replay page: sample, metrics, timeline, transport controls, progress bar |
+| `frontend/replay.html` | Replay page: sample, metrics, timeline, transport controls, progress bar |
 | `frontend/replay.js` | Replay wiring: playback loop, seeking, mode switch, shared renderers |
-| `backend/server.py` | FastAPI app: `/ws` WebSocket (`model_info`, `inference`, `next_sample`) plus static frontend |
-| `backend/visualiser.py` | Loads the existing PyTorch model, serialises it and runs one-sample forward passes |
-| `tests/test_milestone2.py` | Model → payload → HTTP/WebSocket → frontend checks |
-| `tests/test_milestone3.py` | Real sample, softmax, activations and `next_sample` checks |
-| `tests/test_milestone4.py` | Live training, Start/Pause/Resume and progress bar checks |
 | `recorder/record_training.py` | Standalone recorder: trains one epoch and writes the binary recording plus manifest |
+| `recorder/model_access.py` | Loads `training/training.py` without training, and encodes weights, activations and the fixed Partial selection |
 | `tests/test_milestone5a.py` | Recorder checks: record layout, sizes, manifest, fixed Partial indices, recorded values vs. PyTorch |
 | `tests/test_milestone5b.py` | Replay checks: page and ids, offline-only wiring, shared modules, colour scale, decoded checkpoints |
 | `scripts/build_pages.py` | Validates a recording and writes the publishable GitHub Pages site to `docs/` |
@@ -270,6 +227,6 @@ output file is the path given to `--json`.
 | `docs/` | The published site: replay page, its modules, `.nojekyll` and `data/` (recording, chunks) |
 | `tests/test_milestone5c.py` | Static-site checks: reproducible build, published layout and sizes, HTTP from a nested path, browser replay |
 
-`training/` is the existing PyTorch implementation. The only change made to it
-(for Milestone 2) is a `if __name__ == "__main__":` guard around its training
-loop so the network can be imported without starting training.
+`training/` is the existing PyTorch implementation. The only change made to it is
+a `if __name__ == "__main__":` guard around its training loop so the network can
+be imported without starting training.

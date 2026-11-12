@@ -8,11 +8,11 @@ layer3), their real initial weights and the training split it already loads. The
 training loop in that file sits behind an ``if __name__ == "__main__":`` guard,
 so importing the module defines the network without starting a training run.
 
-The functions were moved here from ``backend/visualiser.py`` during Cleanup 2 so
-the recorder no longer imports the retired backend package. Signatures and
-behaviour are unchanged; the recorder writes the same bytes as before. Only the
-helpers the recorder calls are present — the JSON/WebSocket payload builders
-stay with the backend until Cleanup 3 removes it.
+The functions used to live in the retired Live Training backend. They were moved
+here during Cleanup 2, before that package was deleted, so the recorder never
+depends on it. Signatures and behaviour are unchanged: the recorder writes the
+same bytes as when it called the backend's copies. Only the helpers the recorder
+calls are present — nothing here builds a WebSocket or JSON payload.
 
 `select_partial_indices()` chooses the Partial view's connections once from the
 model's initial weights, so a recording only has to describe those connections

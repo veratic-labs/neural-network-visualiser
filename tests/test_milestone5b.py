@@ -11,19 +11,18 @@ Checks, in order:
   2. the page's element ids are unique and cover every id replay.js looks up;
      the mode toggle, the four transport buttons, the speed selector, the
      timeline and the progress bar are all present and start disabled
-  3. replay.js reads the recording through recording.js, draws with the same
-     NetworkView as the live page and formats with the same panels.js helpers;
-     it never opens a socket, never hard-codes a count the manifest owns and
-     never interpolates between checkpoints
-  4. main.js and replay.js share panels.js instead of each carrying a copy, and
-     index.html still provides every id main.js looks up
+  3. replay.js reads the recording through recording.js, draws with the shared
+     NetworkView and formats with the same panels.js helpers; it never opens a
+     socket, never hard-codes a count the manifest owns and never interpolates
+     between checkpoints
+  4. replay.js imports panels.js instead of carrying its own copy of the helpers
   5. the five colour stops of the CSS weight scale are the renderer's stops and
      the manifest's stops
   6. the recording itself decodes the way the replay reads it: checkpoint 0 is
      the initial model with no sample, the last checkpoint is Step 60,000, and
      every decoded step matches the manifest's recorded step list
-  7. training/ and backend/ are unchanged, recordings/ is ignored by Git and
-     README.md documents the replay page, the static server and this test
+  7. training/ is unchanged, recordings/ is ignored by Git and README.md
+     documents the replay page, the static server and this test
 """
 
 from __future__ import annotations
@@ -120,7 +119,7 @@ def element_ids(script: str) -> list[str]:
 
 def check_files() -> None:
     print("\n-- files --")
-    for name in ("replay.html", "replay.js", "recording.js", "panels.js", "network.js", "main.js", "index.html"):
+    for name in ("replay.html", "replay.js", "recording.js", "panels.js", "network.js"):
         check((FRONTEND / name).is_file(), f"frontend/{name} exists")
 
     html = read(FRONTEND / "replay.html")
@@ -270,21 +269,26 @@ def check_shared_panels() -> None:
     for helper in PANEL_HELPERS:
         check(f"export function {helper}(" in panels, f"panels.js exports {helper}()")
 
-    main = read(FRONTEND / "main.js")
-    check('from "./panels.js"' in main, "main.js imports the shared panel helpers")
+    replay = read(FRONTEND / "replay.js")
+    check('from "./panels.js"' in replay, "replay.js imports the shared panel helpers")
+    imported = re.search(r'import \{([^}]*)\} from "\./panels\.js";', replay)
+    names = {
+        name.strip()
+        for name in (imported.group(1).split(",") if imported else [])
+        if name.strip()
+    }
+    check(
+        names == set(PANEL_HELPERS),
+        "replay.js imports every panel helper instead of redefining one",
+        sorted(names),
+    )
     for helper in PANEL_HELPERS:
         check(
-            re.search(rf"^function {helper}\(", main, re.MULTILINE) is None,
-            f"main.js keeps no private copy of {helper}()",
+            re.search(rf"^function {helper}\(", replay, re.MULTILINE) is None,
+            f"replay.js keeps no private copy of {helper}()",
         )
 
-    check("renderProgressPanel(elements" in main, "main.js renders progress through the shared panel")
-    check("new WebSocket(" in main, "the live page still opens its WebSocket")
-
-    index = read(FRONTEND / "index.html")
-    index_ids = set(ids_in(index))
-    unknown = sorted({name for name in element_ids(main) if name not in index_ids})
-    check(not unknown, "every id main.js looks up still exists in index.html", unknown)
+    check("renderProgressPanel(elements" in replay, "replay.js renders progress through the shared panel")
 
 
 def check_colours() -> None:
@@ -475,21 +479,16 @@ def check_recording() -> None:
 
 def check_repository() -> None:
     print("\n-- repository --")
+    # Only training/ is asserted here: the recorder and the frontend are sources
+    # this project still develops, so unrelated working-tree changes there must
+    # not fail a functional test.
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--", "training", "backend"],
+        ["git", "status", "--porcelain", "--", "training"],
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
     )
-    check(status.stdout.strip() == "", "training/ and backend/ are unchanged", status.stdout.strip())
-
-    index_status = subprocess.run(
-        ["git", "status", "--porcelain", "--", "frontend/index.html"],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
-    check(index_status.stdout.strip() == "", "the live page's markup is unchanged", index_status.stdout.strip())
+    check(status.stdout.strip() == "", "training/ is unchanged", status.stdout.strip())
 
     ignored = subprocess.run(["git", "check-ignore", "-q", "recordings/example/manifest.json"], cwd=str(REPO_ROOT))
     check(ignored.returncode == 0, "recordings/ is ignored by Git")

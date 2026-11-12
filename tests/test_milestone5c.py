@@ -25,9 +25,9 @@ broken and also when `docs/` is stale. It then checks, in order:
      checkpoint, Full mode's connections stay still while Partial mode follows
      the checkpoint, all three speeds run, and a missing chunk stops the replay
      with the file's own error
-  7. the repository stays intact: the replay page, training/, backend/ and the
-     recording are unchanged, `docs/` is not Git-ignored, README.md documents
-     the build and this test
+  7. the repository stays intact: the replay page, training/ and the recording
+     are unchanged, `docs/` is not Git-ignored, README.md documents the build
+     and this test
 
 Nothing is committed, pushed or uploaded; the recording is only read.
 """
@@ -192,7 +192,7 @@ def tree_digest(root: Path) -> dict[str, str]:
     return {
         path.relative_to(root).as_posix(): sha256(path)
         for path in sorted(root.rglob("*"))
-        if path.is_file()
+        if path.is_file() and "__pycache__" not in path.parts
     }
 
 
@@ -277,6 +277,8 @@ def check_build() -> None:
     print("\n-- build --")
     recording_before = tree_digest(RECORDING)
     frontend_before = tree_digest(FRONTEND)
+    # The build reads the training code and the recorder; neither tree may move.
+    sources_before = {name: tree_digest(REPO_ROOT / name) for name in ("training", "recorder")}
 
     first = run_build()
     check(
@@ -307,6 +309,13 @@ def check_build() -> None:
 
     check(tree_digest(FRONTEND) == frontend_before, "the build does not change frontend/")
     check(tree_digest(RECORDING) == recording_before, "the build does not change the recording")
+    sources_after = {name: tree_digest(REPO_ROOT / name) for name in ("training", "recorder")}
+    moved = sorted(name for name in sources_before if sources_after[name] != sources_before[name])
+    check(
+        not moved,
+        "the build does not change training/ or recorder/",
+        moved,
+    )
 
 
 def check_structure() -> None:
@@ -484,7 +493,15 @@ def check_page() -> None:
     source = (FRONTEND / "replay.html").read_text(encoding="utf-8")
     page = PAGE.read_text(encoding="utf-8")
 
-    check(page != source, "docs/index.html is not a copy of the replay page")
+    expected = re.sub(
+        r'<body class="replay" data-recording="[^"]*">',
+        '<body class="replay" data-recording="./data/" data-run-name="mnist-epoch1">',
+        source,
+    )
+    check(
+        page == expected,
+        "docs/index.html is frontend/replay.html with only the recording path changed",
+    )
     check(
         'data-recording="./data/"' in page and 'data-run-name="mnist-epoch1"' in page,
         "the page reads ./data/ and keeps the run name that path cannot provide",
@@ -495,23 +512,18 @@ def check_page() -> None:
     )
     check(
         "The live training page is not part of this published site." in page,
-        "the page explains that it is the static copy, without a live mode",
+        "the page states that the live training page is not part of the site",
     )
-    check('<a href="index.html">' not in page, "the page no longer links to the live page")
+    check('<a href="index.html">' not in page, "the page links to no Live Training application")
 
     changed = [
         line[1:].strip()
         for line in difflib.unified_diff(source.splitlines(), page.splitlines(), n=0)
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
     ]
-    accounted = [
-        line
-        for line in changed
-        if "data-recording" in line or "live" in line or "index.html" in line or "backend" in line
-    ]
     check(
-        4 <= len(changed) <= 6 and len(accounted) == len(changed),
-        "the only edits to the replay page are the recording path and the live-page note",
+        len(changed) == 2 and all("data-recording" in line for line in changed),
+        "the only edits to the replay page are the two halves of the recording path",
         changed,
     )
 
@@ -665,7 +677,7 @@ def check_http() -> None:
 
         for missing in (
             "training/training.py",
-            "backend/server.py",
+            "recorder/record_training.py",
             "recordings/mnist-epoch1/manifest.json",
             "data/chunks/chunk-0013.bin",
             "data/model-weights.bin",
@@ -1206,25 +1218,17 @@ def check_repository() -> None:
     ignored = git("check-ignore", "-q", "recordings/mnist-epoch1/manifest.json")
     check(ignored.returncode == 0, "recordings/ stays ignored, so the 34 MiB site is not committed twice")
 
-    changed = git("status", "--porcelain", "--", "training", "backend", "recorder")
-    paths = sorted(line[3:].strip() for line in changed.stdout.splitlines() if line.strip())
+    # The site is built from frontend/ as it stands, so frontend/ must hold the
+    # replay page and the five modules the build copies — and nothing else: the
+    # Live Training page and its backend are gone. check_structure proves the
+    # published files really are byte-for-byte copies of those sources.
+    present = sorted(path.name for path in FRONTEND.iterdir() if path.is_file())
     check(
-        not paths,
-        "the published site leaves training/, backend/ and recorder/ untouched",
-        paths,
+        set(present) == {"replay.html", *ASSETS},
+        "frontend/ holds the replay page and its modules, and no Live Training page",
+        present,
     )
-
-    # The site is built from frontend/ as it stands, so this milestone may only
-    # touch the replay wiring and its stylesheet; anything else means the site's
-    # sources moved and this test has to be reconsidered. check_structure proves
-    # the published files really are byte-for-byte copies of those sources.
-    changed = git("status", "--porcelain", "--", "frontend")
-    paths = sorted(line[3:].strip() for line in changed.stdout.splitlines() if line.strip())
-    check(
-        set(paths) <= {"frontend/replay.js", "frontend/style.css"},
-        "only the replay wiring and its stylesheet differ from the last commit",
-        paths,
-    )
+    check(not (REPO_ROOT / "backend").exists(), "the retired backend package is gone")
 
     replay_js = (FRONTEND / "replay.js").read_text(encoding="utf-8")
     check(

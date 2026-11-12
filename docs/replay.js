@@ -1,12 +1,11 @@
 /**
  * replay.js — Milestone 5B: the offline replay page.
  *
- * This page shows a recorded run instead of a live one. It reads the static
- * files of one recording directory through `recording.js` (manifest, initial
- * weights, biases, fixed Partial indices, checkpoint chunks), draws the network
- * with the same `NetworkView` as `main.js`, and writes the image, facts, bars
- * and progress with the same `panels.js`. Nothing draws twice and
- * nothing here trains, sends or invents a value.
+ * This page shows a recorded run. It reads the static files of one recording
+ * directory through `recording.js` (manifest, initial weights, biases, fixed
+ * Partial indices, checkpoint chunks), draws the network with the shared
+ * `NetworkView`, and writes the image, facts, bars and progress with `panels.js`.
+ * Nothing draws twice and nothing here trains, sends or invents a value.
  *
  * One rule runs through the whole file: the checkpoint on screen is always a
  * recorded one. The timeline holds checkpoint indices, Previous and Next move by
@@ -99,7 +98,7 @@ const elements = {
 
 /** The open recording, or null until its manifest has loaded and validated. */
 let recording = null;
-/** The shared canvas renderer: the same class `main.js` uses. */
+/** The shared canvas renderer from `network.js`. */
 let view = null;
 /** Output bar elements, built once from the recorded architecture. */
 let outputRows = [];

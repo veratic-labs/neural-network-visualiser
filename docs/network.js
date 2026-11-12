@@ -13,10 +13,9 @@
  * canvas size change.
  *
  * This module only renders the data it is handed. It has no knowledge of where
- * that data comes from: `main.js` receives the real weights and the real
- * per-layer activations from the FastAPI backend over a WebSocket and hands
- * them over with `setModel()`, `setActivations()` and, once per training step,
- * `updateFrame()`.
+ * that data comes from: `replay.js` reads the recorded weights and the recorded
+ * per-layer activations and hands them over with `setModel()`,
+ * `setActivations()` and, once per checkpoint, `updateFrame()`.
  *
  * Every connection is coloured by `weightColour()`: one fixed diverging scale
  * from dark red (negative) through neutral grey (zero) to dark purple
@@ -69,8 +68,8 @@ const NEURON_COLOUR = { r: 148, g: 163, b: 184 }; // #94a3b8
 /**
  * The stops of the weight scale. They are evenly spaced along the weight axis
  * (every step is MAX_DISPLAY_WEIGHT / 2), so a plain five-stop gradient over
- * these same colours reproduces the ramp exactly — which is how `main.js` paints
- * the legend, through `weightColour()`.
+ * these same colours reproduces the ramp exactly — which is how the replay
+ * page's fixed CSS gradient draws the legend.
  */
 const WEIGHT_COLOUR_STOPS = [
   { weight: MIN_DISPLAY_WEIGHT, colour: NEGATIVE_COLOUR },
@@ -174,8 +173,9 @@ function weightScalePosition(weight) {
  *
  * This is the only place where a weight becomes a colour, so a given weight
  * always looks the same: no per-layer factor, no normalisation against the other
- * weights, no dependence on the training step. `main.js` paints the legend from
- * this very function, so the swatches and the lines cannot disagree.
+ * weights, no dependence on the training step. The replay page's legend uses
+ * these same stops, and tests/test_milestone5b.py checks the gradient against
+ * this function, so the swatches and the lines cannot disagree.
  *
  * @param {number} weight
  * @returns {{ r: number, g: number, b: number }}
@@ -228,9 +228,9 @@ function connectionStyle(weight) {
  * A fallback Partial-view selection: the PARTIAL_TOP_K largest |weight| incoming
  * connections of every neuron, read once from freshly loaded weights.
  *
- * `main.js` passes the backend's own fixed selection to `setModel()`, which is
- * what keeps both sides on exactly the same 1,010 indices; this is only used by
- * a caller that has no selection to hand.
+ * `replay.js` passes the selection recorded in `partial-indices.bin` to
+ * `setModel()`, which is what keeps the page on exactly the recorded 1,010
+ * indices; this is only used by a caller that has no selection to hand.
  */
 function initialSelection(architecture, weights) {
   if (!Array.isArray(weights) || !architecture || architecture.length < 2) return [];
@@ -262,8 +262,8 @@ export class NetworkView {
     this.weights = [];
     /**
      * The fixed Partial-view connections: one array of input indices per output
-     * neuron, per layer. Chosen once from the initial weights (backend and
-     * frontend share the same indices) and never recomputed.
+     * neuron, per layer. Chosen once by the recorder from the initial weights
+     * and stored in the recording, never recomputed.
      */
     this.selection = [];
     this.activations = [];
@@ -311,8 +311,9 @@ export class NetworkView {
   }
 
   /**
-   * The fixed Partial-view connection indices, as sent by the backend with
-   * `model_info`: one array of input indices per receiving neuron, per layer.
+   * The fixed Partial-view connection indices, as read from the recording's
+   * `partial-indices.bin`: one array of input indices per receiving neuron, per
+   * layer.
    * @param {Array<ArrayLike<number>[]>} selection
    */
   setSelection(selection) {
@@ -321,13 +322,13 @@ export class NetworkView {
   }
 
   /**
-   * One live training frame: the newest weights and the activations of the same
+   * One checkpoint's frame: the newest weights and the activations of the same
    * step, drawn with a single render.
    *
-   * In partial mode the backend only sends the values of the fixed selection, so
-   * the matrices are sparse (zero elsewhere). The indices themselves never
-   * change, so `this.selection` is left untouched: the same 1,010 lines stay on
-   * screen and only their colours follow the new weights.
+   * In partial mode a checkpoint only carries the values of the fixed
+   * selection, so the matrices are sparse (zero elsewhere). The indices
+   * themselves never change, so `this.selection` is left untouched: the same
+   * 1,010 lines stay on screen and only their colours follow the new weights.
    *
    * @param {{ weights?: Float32Array[], activations?: Float32Array[] }} frame
    */
@@ -347,8 +348,9 @@ export class NetworkView {
 
   /**
    * Replaces the layer sizes, the weights and the fixed partial selection
-   * together, as sent by the backend's `model_info` message. Layer captions then
-   * show the sizes the model really has instead of the default ARCHITECTURE.
+   * together, as the recording's manifest and files describe them. Layer
+   * captions then show the sizes the model really has instead of the default
+   * ARCHITECTURE.
    *
    * @param {{ architecture: object[], weights: Float32Array[],
    *           selection?: Array<ArrayLike<number>[]> | null }} model

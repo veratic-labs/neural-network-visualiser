@@ -10,11 +10,12 @@ the optimiser update all come from ``training/training.py``, imported through
 *when* to look at the network and *how* to write what it sees: it never builds a
 second model, never re-implements the forward/backward pass, never changes a
 hyperparameter and never calls ``train()`` (which would write weights into
-``training/``). It imports nothing from the retired ``backend`` package and
-never binds a port.
+``training/``). It binds no port and imports nothing from the retired Live
+Training backend, which no longer exists.
 
 Capture convention (plan.md section 7.3), identical to the live Milestone 4
-frame that ``backend/visualiser.py`` produced before the helpers moved here:
+frame that the retired backend produced before its helpers moved to
+``recorder/model_access.py``:
 
 * the image, true label, predicted digit, softmax probabilities, loss and
   activations of checkpoint ``k`` are read from the forward pass of step ``k``,
@@ -488,7 +489,7 @@ def build_manifest(
             "initial_weights_sha256_note": (
                 "sha256 over every initial weight and bias byte in layer order "
                 "(weights then biases per layer), as "
-                "backend.visualiser.weights_checksum() computes it"
+                "recorder.model_access.weights_checksum() computes it"
             ),
         },
         "training": {
@@ -559,7 +560,7 @@ def build_manifest(
             "capture": "pre-update",
             "input": (
                 "input activations are the 784 pixels divided by 255; the replay derives "
-                "them from the uint8 image exactly as frontend/main.js does"
+                "them from the uint8 image exactly as frontend/replay.js does"
             ),
         },
         "images": {

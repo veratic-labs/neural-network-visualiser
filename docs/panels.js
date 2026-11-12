@@ -1,17 +1,15 @@
 /**
- * panels.js — the DOM panels that the live page and the replay page share.
+ * panels.js — the DOM panels that the replay page shows.
  *
- * `main.js` (live: WebSocket) and `replay.js` (recorded files) show the same
- * panels, so the code that writes them is kept here once instead of being copied
- * into a second page. Both pages use the same element ids and pass their own
- * `elements` map, so each page can only update its own DOM.
+ * `replay.js` writes every panel through this module, so the formatting lives in
+ * one place instead of being repeated per panel. The page passes its own
+ * `elements` map, so the module can only update the DOM it was given.
  *
  * Two things deliberately do not live here:
  *   - the network canvas itself, which `network.js` draws in both modes;
- *   - the live page's weight legend, which `main.js` paints from
- *     `network.js`'s own `weightColour()`. The replay page shows the same five
- *     stops as a fixed CSS gradient (style.css), checked against the renderer by
- *     tests/test_milestone5b.py.
+ *   - the weight legend, which the page shows as a fixed CSS gradient
+ *     (style.css) standing for `network.js`'s own `weightColour()` stops. The
+ *     gradient is checked against the renderer by tests/test_milestone5b.py.
  *
  * Everything written here is a number the caller already has: this module
  * formats and places values, it never derives, smooths or invents one.

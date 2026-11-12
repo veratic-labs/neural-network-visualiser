@@ -16,15 +16,15 @@ What it does
    (`replay.js`, `recording.js`, `network.js`, `panels.js`), `.nojekyll`, and
    the recording under `docs/data/` (manifest, initial weights, biases, Partial
    indices and one file per checkpoint chunk).
-3. Changes exactly two things in the page: the recording path becomes the
-   relative `./data/` (so a GitHub Pages project URL works unchanged) and the
-   paragraph about the live page no longer links to a page this site does not
-   contain. Everything else is copied byte for byte.
+3. Changes exactly one thing in the page: the recording path becomes the
+   relative `./data/`, so a GitHub Pages project URL works unchanged.
+   Everything else is copied byte for byte, and a page that links to a Live
+   Training application is refused instead of published.
 
-`frontend/replay.html`, `frontend/`, `training/`, `recorder/`, `backend/` and
-the recording itself are only read, never modified. The build is reproducible:
-unchanged sources produce byte-identical output, because files are copied with
-their timestamps and only the two documented page edits are applied.
+`frontend/replay.html`, `frontend/`, `training/`, `recorder/` and the recording
+itself are only read, never modified. The build is reproducible: unchanged
+sources produce byte-identical output, because files are copied with their
+timestamps and only the one documented page edit is applied.
 
 A missing or inconsistent recording file stops the build with a message naming
 the file, and nothing is written.
@@ -76,9 +76,6 @@ RECORD_FIELDS = (
 )
 
 BODY_PATTERN = re.compile(r'<body class="replay" data-recording="[^"]*">')
-LIVE_MODE_PATTERN = re.compile(
-    r"The live\s+mode is still <a href=\"index\.html\">index\.html</a> with the Python backend running\."
-)
 PAGE_REFERENCE_PATTERN = re.compile(r'(?:href|src)="([^"]+)"')
 
 
@@ -499,8 +496,8 @@ def check_records(
 
 
 def build_page(source_text: str, run_name: str) -> str:
-    """The replay page with its two documented changes for a published copy."""
-    body, body_count = BODY_PATTERN.subn(
+    """The replay page with its one documented change for a published copy."""
+    page, body_count = BODY_PATTERN.subn(
         f'<body class="replay" data-recording="./{DATA_DIRECTORY}/" '
         f'data-run-name="{html.escape(run_name, quote=True)}">',
         source_text,
@@ -511,14 +508,11 @@ def build_page(source_text: str, run_name: str) -> str:
             '<body class="replay" data-recording="..."> tag'
         )
 
-    page, note_count = LIVE_MODE_PATTERN.subn(
-        "The live training page is not part of this published site.",
-        body,
-    )
-    if note_count != 1:
-        fail("frontend/replay.html no longer has exactly one sentence about the live page")
     if 'href="index.html"' in page:
-        fail("the built page still links to index.html, which is the page itself")
+        fail(
+            "the built page links to index.html, which is the page itself; a "
+            "published page must not link to a Live Training application"
+        )
     return page
 
 
@@ -549,6 +543,8 @@ def prepare_output(output: Path) -> Path:
     protected = [
         FRONTEND.resolve(),
         (REPO_ROOT / "training").resolve(),
+        # The live backend is gone; the entry stays as a safeguard in case a
+        # directory with that name ever reappears beside the sources.
         (REPO_ROOT / "backend").resolve(),
         (REPO_ROOT / "recorder").resolve(),
         DEFAULT_RECORDING.resolve(),
