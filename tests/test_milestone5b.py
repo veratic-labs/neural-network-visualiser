@@ -21,12 +21,13 @@ Checks, in order:
   6. the recording itself decodes the way the replay reads it: checkpoint 0 is
      the initial model with no sample, the last checkpoint is Step 60,000, and
      every decoded step matches the manifest's recorded step list
-  7. training/ is unchanged, recordings/ is ignored by Git and README.md
-     documents the replay page, the static server and this test
+  7. training/'s executable code is unchanged, recordings/ is ignored by Git and
+     README.md documents the replay page, the static server and this test
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import struct
@@ -488,7 +489,22 @@ def check_repository() -> None:
         capture_output=True,
         text=True,
     )
-    check(status.stdout.strip() == "", "training/ is unchanged", status.stdout.strip())
+    changes = [line for line in status.stdout.splitlines() if line.strip()]
+    unexpected = [line for line in changes if line[3:] != "training/training.py"]
+    check(not unexpected, "training/ has no working-tree changes other than training/training.py", unexpected)
+
+    committed = subprocess.run(
+        ["git", "show", "HEAD:training/training.py"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    check(committed.returncode == 0, "training/training.py is tracked by Git", committed.stderr.strip())
+    working = read(REPO_ROOT / "training" / "training.py")
+    check(
+        ast.dump(ast.parse(committed.stdout)) == ast.dump(ast.parse(working)),
+        "training/training.py's executable code is unchanged",
+    )
 
     ignored = subprocess.run(["git", "check-ignore", "-q", "recordings/example/manifest.json"], cwd=str(REPO_ROOT))
     check(ignored.returncode == 0, "recordings/ is ignored by Git")

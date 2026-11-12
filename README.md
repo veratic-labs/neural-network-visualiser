@@ -1,11 +1,13 @@
 # Neural Network Training Visualiser
 
-Real-time visualiser for the existing PyTorch MNIST MLP in `training/`
-(`784 → 128 → 64 → 10`, batch size 1). See `plan.md` for the full design and
-milestones.
+Static replay visualiser for the existing PyTorch MNIST MLP in `training/`
+(`784 → 128 → 64 → 10`, batch size 1). See `plan.md` for the full design,
+milestones and preservation rules.
 
-**Current state: Cleanup 3 — the replay is published as a static site, and the
-Live Training app is gone.** A recording written by the recorder is replayed by
+**Current state: Cleanup 4 — final architecture.** The project records one real
+training run with the Python recorder and replays it from plain static files in
+the browser. The legacy Live Training application, FastAPI backend and WebSocket
+interface have been removed. A recording written by the recorder is replayed by
 `frontend/replay.html`: no server-side application, no socket, just the files in
 `recordings/`. Play, Pause, Previous, Next, a speed selector and a timeline move
 between the recorded checkpoints, and the same canvas renderer draws them. A
@@ -19,24 +21,72 @@ and activations are shown for every checkpoint that has one.
 
 ## Run it
 
-The project has two halves, and neither needs a Python server:
+The project has two halves:
 
 * **Record** a training run once, offline, into a directory of binary files —
   see [Record a training run](#record-a-training-run-offline).
 * **Replay** that recording in the browser — from `frontend/replay.html` against
   `recordings/`, or from the published copy in `docs/`.
 
-The replay page is static: it needs a plain file server and nothing else, which
-is why the copy in `docs/` can be hosted on GitHub Pages. The sections below
-cover each half, the tests that verify them and the recording format.
+Recording uses Python and PyTorch. Replaying needs no Python server: the page is
+static and needs only a plain file server, which is why the copy in `docs/` can
+be hosted on GitHub Pages. The sections below cover installation, training,
+recording, replay, publishing, the tests that verify them and the recording
+format.
+
+## Install
+
+Create the project virtualenv and install the runtime dependencies:
+
+```bash
+python3 -m venv venv
+./venv/bin/python -m pip install --upgrade pip
+./venv/bin/python -m pip install -r requirements.txt
+```
+
+`requirements.txt` lists only the three top-level runtime packages that the
+training code and recorder import; their transitive dependencies are installed
+automatically. No FastAPI, Uvicorn or WebSocket package is needed, and the
+static replay page needs no third-party package. The MNIST data is downloaded on
+first use into `training/data/`, which Git ignores.
+
+The browser tests and the playback diagnostic use Playwright with Chromium as
+an **optional development dependency**, not a runtime requirement:
+
+```bash
+./venv/bin/python -m pip install playwright
+./venv/bin/python -m playwright install chromium
+```
+
+On Linux, Chromium also needs system libraries. If it reports a missing library
+such as `libnspr4.so`, install them with:
+
+```bash
+sudo ./venv/bin/python -m playwright install-deps chromium
+```
+
+## Train the model directly
+
+`training/` is the existing PyTorch implementation and remains the source of
+truth for the network and the training algorithm. To run its training loop:
+
+```bash
+cd training
+../venv/bin/python training.py
+```
+
+That runs one epoch — 60,000 optimiser steps at batch size 1 — prints the loss
+every 100 steps and writes `training/weights/mnist_mlp.pth`. The recorder below
+performs the same steps through the same `train_step()` without calling
+`train()` or writing that checkpoint file.
 
 ## Record a training run (offline)
 
-Milestone 5A adds a standalone recorder that trains the same network once and
-writes the run to disk, so it can be replayed without retraining.
+The standalone recorder trains the same network once and writes the run to disk,
+so it can be replayed without retraining.
 
 ```bash
-./venv/bin/python -m recorder.record_training --output recordings/mnist-epoch1
+./venv/bin/python -m recorder.record_training --output recordings/full-run
 ```
 
 That runs one full epoch — 60,000 optimiser steps at batch size 1 — and records a
@@ -67,6 +117,11 @@ A recording directory contains:
 
 `manifest.json` is written last, so its presence is what marks a recording as
 complete. Everything is little-endian and `recordings/` is ignored by Git.
+
+`recordings/mnist-epoch1/` is the reference recording and is preserved
+byte-for-byte, including the free-text notes in its manifest. Those notes are
+metadata written by the recorder that produced it; the replay reads the manifest's
+numeric layout and data fields and never interprets the notes as instructions.
 
 Each record holds the MNIST sample, its true label, the predicted digit, the
 softmax probabilities, the loss and the layer activations of the forward pass the
@@ -129,24 +184,26 @@ It must be served over HTTP rather than opened as a `file://` URL, because
 ```
 
 This checks the page, the replay script, the shared modules, the colour scale, the
-recording's layout and decoded checkpoints, and that `training/` is untouched. It
-needs the recorder output, not a training run.
+recording's layout and decoded checkpoints, and that `training/`'s executable
+code is untouched. It needs the recorder output, not a training run.
 
 ## Publish the replay as a static site (GitHub Pages)
 
-Milestone 5C turns the replay into a self-contained site in `docs/`, which GitHub
-Pages can serve without a backend:
+The build turns the replay into a self-contained site in `docs/`, which GitHub
+Pages can serve without any server-side application:
 
 ```bash
 ./venv/bin/python scripts/build_pages.py
 ```
 
-The build validates the recording (manifest, record layout, file sizes, step
-list, Partial indices and the weight checksum), then writes:
+The build reads `recordings/mnist-epoch1/` by default; pass
+`--recording recordings/full-run` to publish a run you recorded elsewhere. It
+validates the recording (manifest, record layout, file sizes, step list, Partial
+indices and the weight checksum), then writes:
 
 | Path | Contents |
 | --- | --- |
-| `docs/index.html` | `frontend/replay.html` with only its `data-recording` path changed to `./data/` |
+| `docs/index.html` | `frontend/replay.html` with `data-recording` changed to `./data/` and `data-run-name` added |
 | `docs/style.css`, `docs/network.js`, `docs/panels.js` | The shared frontend files, copied byte for byte |
 | `docs/replay.js`, `docs/recording.js` | The replay wiring and the recording reader, copied byte for byte |
 | `docs/data/manifest.json`, `docs/data/model.bin`, `docs/data/model-biases.bin`, `docs/data/partial-indices.bin` | The recording's manifest, initial weights, biases and Partial selection |
@@ -154,7 +211,7 @@ list, Partial indices and the weight checksum), then writes:
 
 `.nojekyll` stops GitHub Pages from running Jekyll over the directory. Every URL
 in the page and the scripts is relative, so the site works at a project-site path
-such as `https://<user>.github.io/mlp-visualisation/`; the recording is read from
+such as `https://<user>.github.io/neural-network-visualiser/`; the recording is read from
 `./data/` because the `<body>` carries `data-recording="./data/"` and
 `data-run-name="mnist-epoch1"`. Nothing outside `docs/` is fetched, so
 `training/`, `recordings/` and the virtualenv never need publishing.
@@ -208,10 +265,29 @@ with Chromium (`./venv/bin/python -m pip install playwright`, then
 when the module is missing. It reads `docs/` and the recording only; the sole
 output file is the path given to `--json`.
 
+## What stays fixed
+
+The cleanup phase changed packaging and documentation, not behaviour. The
+following are preserved and guarded by the tests:
+
+* **6,001 checkpoints** per full recording, at steps 0, 10, 20, …, 60,000, in 13
+  chunk files of 500 records each, with a fixed 5,688-byte record stride.
+* **The fixed 1,010 Partial connections** — the top 5 incoming |weight| per
+  neuron, selected once from the initial weights and never reselected.
+* **The ±0.5 colour scale** with its five stops, shared by the renderer, the
+  manifest and the stylesheet.
+* **The recording format** — field offsets, dtypes, manifest format name and
+  version, chunk naming, and the existing recorded bytes.
+* **Replay behaviour** — Full and Partial modes, Play/Pause/Previous/Next, the
+  three speeds, timeline seeking, and Fast-only chunk prefetching.
+* **The published site** — `docs/index.html`, its modules, `.nojekyll` and
+  `docs/data/` are byte-identical to the approved GitHub Pages deployment.
+
 ## Files
 
 | File | Purpose |
 | --- | --- |
+| `requirements.txt` | The three Python runtime dependencies: `torch`, `torchvision`, `numpy` |
 | `frontend/style.css` | Styling and responsive layout |
 | `frontend/network.js` | Canvas renderer for neurons, connections (full and partial modes) and activations |
 | `frontend/panels.js` | Panel rendering shared by the replay page's modules |
@@ -227,6 +303,9 @@ output file is the path given to `--json`.
 | `docs/` | The published site: replay page, its modules, `.nojekyll` and `data/` (recording, chunks) |
 | `tests/test_milestone5c.py` | Static-site checks: reproducible build, published layout and sizes, HTTP from a nested path, browser replay |
 
-`training/` is the existing PyTorch implementation. The only change made to it is
-a `if __name__ == "__main__":` guard around its training loop so the network can
-be imported without starting training.
+`training/` is the existing PyTorch implementation. The model, dataset, loss,
+optimiser and training maths are unchanged. Earlier milestones wrapped the
+original loop in `train()` behind an `if __name__ == "__main__":` guard and
+extracted the identical operations into `train_step()` so the recorder can call
+them; Cleanup 4 later corrected a stale comment that referred to the removed
+backend.

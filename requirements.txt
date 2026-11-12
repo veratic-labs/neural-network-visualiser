@@ -1,0 +1,5 @@
+# Runtime dependencies for the offline recorder and the existing training code.
+# The replay site in docs/ is static and needs no Python at all.
+torch
+torchvision
+numpy

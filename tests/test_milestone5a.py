@@ -19,9 +19,9 @@ Checks, in order:
      pre-update forward pass while the Partial weights are the post-update
      parameters
   6. the final step is recorded even when it is not a multiple of the cadence
-  7. no file in training/ changes, the training maths is untouched, no module in
-     recorder/ imports backend/, and recordings/ is ignored by Git while
-     README.md documents how to record
+  7. no executable code in training/ changes (comment-only edits are allowed and
+     are compared by AST against HEAD), no module in recorder/ imports backend/,
+     and recordings/ is ignored by Git while README.md documents how to record
 
 A short 100-step run is used; plan.md records the full 60,000-step run as a
 manual verification because it takes minutes.
@@ -29,6 +29,7 @@ manual verification because it takes minutes.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import struct
@@ -511,9 +512,26 @@ def check_source() -> None:
 
 def check_repository() -> None:
     # Only training/ is asserted: the recorder is still developed, and its own
-    # working-tree changes must not make a functional test fail.
+    # working-tree changes must not make a functional test fail. Documentation
+    # may correct comments in training.py, but its executable code must match
+    # HEAD exactly, so compare the parsed syntax trees rather than the text.
     status = subprocess.run(["git", "status", "--porcelain", "--", "training"], cwd=str(REPO_ROOT), capture_output=True, text=True)
-    check(status.stdout.strip() == "", "training/ is unchanged", status.stdout.strip())
+    changes = [line for line in status.stdout.splitlines() if line.strip()]
+    unexpected = [line for line in changes if line[3:] != "training/training.py"]
+    check(not unexpected, "training/ has no working-tree changes other than training/training.py", unexpected)
+
+    committed = subprocess.run(
+        ["git", "show", "HEAD:training/training.py"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    check(committed.returncode == 0, "training/training.py is tracked by Git", committed.stderr.strip())
+    working = (REPO_ROOT / "training" / "training.py").read_text(encoding="utf-8")
+    check(
+        ast.dump(ast.parse(committed.stdout)) == ast.dump(ast.parse(working)),
+        "training/training.py's executable code is unchanged",
+    )
 
     ignored = subprocess.run(["git", "check-ignore", "-q", "recordings/example/manifest.json"], cwd=str(REPO_ROOT))
     check(ignored.returncode == 0, "recordings/ is ignored by Git")

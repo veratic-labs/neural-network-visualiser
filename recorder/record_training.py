@@ -2,7 +2,7 @@
 
 Run it from the repository root with the project virtualenv:
 
-    ./venv/bin/python -m recorder.record_training --output recordings/mnist-epoch1
+    ./venv/bin/python -m recorder.record_training --output recordings/full-run
 
 The network, the dataset, the loss function, the optimiser, the DataLoader and
 the optimiser update all come from ``training/training.py``, imported through

@@ -2,7 +2,7 @@
 
 ## Project Context
 
-This project is a real-time Neural Network Training Visualiser built with PyTorch, FastAPI, HTML, CSS, and JavaScript.
+This project is a Neural Network Training Visualiser built with PyTorch, HTML, CSS, and JavaScript. The final architecture is an offline training recorder plus a static replay site; the legacy FastAPI/WebSocket Live Training application has been removed.
 
 Read `plan.md` for the full project architecture, requirements, milestones, and acceptance criteria.
 
@@ -19,7 +19,7 @@ Read `plan.md` for the full project architecture, requirements, milestones, and 
 
 - Keep the existing PyTorch training logic intact unless changes are required by the current milestone.
 - Follow the architecture defined in `plan.md`.
-- Keep frontend rendering separate from backend training logic.
+- Keep frontend rendering separate from Python training logic.
 - Avoid unnecessary dependencies, abstractions, and refactoring.
 - Prefer simple, readable, maintainable code.
 - Do not silently change project requirements.

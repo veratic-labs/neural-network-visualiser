@@ -1,6 +1,6 @@
 # Neural Network Training Visualiser — Implementation Plan
 
-> **Document status.** Updated at the start of the Project Cleanup phase. Milestones 1–5C are complete: Milestones 1–4 built the Live Training visualiser and Milestones 5A–5C added the offline Training Recorder, the static Replay Visualiser and the GitHub Pages deployment. **The final supported application is the offline Training Recorder plus the Static Replay Visualiser published to GitHub Pages.** Live Training, the FastAPI backend and the WebSocket interface are retired. Cleanup 1 (this document update) is complete on approval; Cleanup 2, Cleanup 3 and Cleanup 4 are planned and each needs explicit approval before work starts.
+> **Document status.** Milestones 1–5C and Cleanup 1–3 are complete and approved. Cleanup 4 (final verification) has been performed; its results await user approval. **The final supported application is the offline Training Recorder plus the Static Replay Visualiser published to GitHub Pages.** Live Training, the FastAPI backend and the WebSocket interface have been removed. The Python runtime dependencies are `torch`, `torchvision` and `numpy` in `requirements.txt`; Playwright remains an optional development dependency for the browser tests and playback diagnostic.
 
 ## 1. Project goal
 
@@ -10,7 +10,7 @@ The existing PyTorch model, training data and training algorithm are the source 
 
 The project was delivered in two stages:
 
-1. **Live stage — Milestones 1–4 (completed historical milestone):** trained in Python while streaming training state over a WebSocket to an HTML/CSS/JavaScript frontend. This mode is retired; its code is removed in Cleanup 3.
+1. **Live stage — Milestones 1–4 (completed historical milestone):** trained in Python while streaming training state over a WebSocket to an HTML/CSS/JavaScript frontend. This mode is retired; its code was removed in Cleanup 3.
 2. **Offline stage — Milestones 5A–5C (completed):** record one complete training run into compact binary files, then replay that recording in the frontend as a static website that needs no Python, FastAPI, PyTorch or WebSocket. This is the final supported application.
 
 Recording once and replaying later makes the visualisation reproducible and freely seekable, and lets it be published as a free static site. The final project therefore consists of exactly three capabilities:
@@ -34,18 +34,18 @@ Everything else in the repository exists only to support those three. GitHub Pag
 | 5A | Training recorder | Completed |
 | 5B | Offline replay visualiser | Completed |
 | 5C | GitHub Pages deployment | Completed and deployed |
-| Cleanup 1 | Project plan update (this document) | Documentation complete — awaiting user approval |
-| Cleanup 2 | Shared helper migration | Planned — not started |
-| Cleanup 3 | Legacy removal | Planned — not started |
-| Cleanup 4 | Final verification | Planned — not started |
+| Cleanup 1 | Project plan update (this document) | Completed and approved |
+| Cleanup 2 | Shared helper migration | Completed and approved |
+| Cleanup 3 | Legacy removal | Completed and approved |
+| Cleanup 4 | Final verification | Verification complete — awaiting user approval |
 
 - **The final supported application is the offline system:** PyTorch training in `training/`, the offline Training Recorder in `recorder/`, and the Static Replay Visualiser in `frontend/` published from `docs/` to GitHub Pages.
-- **The requirement to preserve Live Training is retired.** Earlier revisions of this plan required `backend/server.py`, the WebSocket interface and the Live Training frontend to keep working. They no longer do; Cleanup 3 removes them.
+- **The requirement to preserve Live Training is retired.** Earlier revisions of this plan required `backend/server.py`, the WebSocket interface and the Live Training frontend to keep working. They no longer do; Cleanup 3 removed them.
 - Milestones 1–5C are historical. They record what was built and approved; they are not to be re-implemented or re-scoped. The 5C deployment remains published on GitHub Pages.
-- Cleanup 2, Cleanup 3 and Cleanup 4 are three separate milestones, each with its own approval gate. Do not begin one without explicit approval, and do not begin the next until the previous one is approved.
+- Cleanup 2, Cleanup 3 and Cleanup 4 are separate milestones, each with its own approval gate. Cleanup 2 and Cleanup 3 are approved; Cleanup 4 is complete when the user explicitly approves it.
 - Nothing outside the currently authorised milestone may be implemented. During the Cleanup phase that also means no behaviour change and no removal beyond what the current cleanup milestone authorises.
 
-### 2.2 Final architecture (target structure)
+### 2.2 Final architecture (implemented structure)
 
 ```text
 training/               # Existing PyTorch model and MNIST loader
@@ -58,11 +58,11 @@ scripts/                # Static build and performance diagnostics
 ```
 
 - **`training/`** — unchanged source of truth for the model, the MNIST loader, the loss, the optimiser and `train_step()`. The cleanup must not modify the training algorithm.
-- **`recorder/`** — the standalone recorder plus, after Cleanup 2, the shared model-access helpers it needs (`recorder/model_access.py`). It must run without FastAPI or Uvicorn.
+- **`recorder/`** — the standalone recorder plus the shared model-access helpers it needs (`recorder/model_access.py`). It runs without FastAPI or Uvicorn.
 - **`recordings/`** — locally generated recordings, ignored by Git (already in `.gitignore`). The existing `recordings/mnist-epoch1/` recording is the reference recording.
-- **`frontend/`** — the static replay page and its modules only: `replay.html`, `style.css`, `network.js`, `panels.js`, `recording.js` and `replay.js`. The Live Training page and its socket client are removed in Cleanup 3.
+- **`frontend/`** — the static replay page and its modules only: `replay.html`, `style.css`, `network.js`, `panels.js`, `recording.js` and `replay.js`. The Live Training page and its socket client were removed in Cleanup 3.
 - **`docs/`** — the published static site: `index.html`, `style.css`, the replay modules, `.nojekyll` and `docs/data/`. It contains no Python.
-- **`tests/`** — recorder, replay and deployment tests. Tests that exclusively exercise the retired Live Training application are retired in Cleanup 3.
+- **`tests/`** — recorder, replay and deployment tests. Tests that exclusively exercised the retired Live Training application were retired in Cleanup 3.
 - **`scripts/`** — `build_pages.py` (static build and validation) and `measure_fast_playback.py` (performance diagnostics).
 
 Not part of the final architecture and removed in Cleanup 3: `backend/server.py`, `backend/trainer.py`, the rest of the `backend/` package, the WebSocket protocol, `frontend/index.html` and `frontend/main.js`.
@@ -85,7 +85,7 @@ A cleanup milestone that would change any of these must stop and ask for approva
 
 ### 3.1 Original real-time decisions (Milestones 1–4) — historical, retired
 
-- **Development environment:** WSL2 Ubuntu for Python, PyTorch, backend and agent workflows; Windows for VS Code and browser. Serve the web UI locally (for example, `http://localhost:8000`).
+- **Development environment:** WSL2 Ubuntu for Python, PyTorch and agent workflows; Windows for VS Code and browser. Serve the web UI locally (for example, `http://localhost:8000`).
 - **Model:** use the existing MNIST MLP (currently expected to be `784 → 128 → 64 → 10`); verify the actual definitions in the supplied code rather than hard-coding assumptions.
 - **Dataset:** use the existing MNIST data pipeline.
 - **Batch size:** **1**. One training step processes one image and performs one optimiser update.
@@ -166,7 +166,7 @@ In the final replay these two states are the viewer-selectable **Full** and **Pa
 
 ## 5. Live backend design (Milestones 2–4) — historical, retired
 
-This section is retained as a historical record of how the live mode worked. It is **not** a requirement to preserve `backend/`, FastAPI, Uvicorn or the WebSocket interface. The recorder's few dependencies on helpers in `backend/visualiser.py` are migrated to `recorder/model_access.py` in Cleanup 2; Cleanup 3 then removes the backend entirely.
+This section is retained as a historical record of how the live mode worked. It is **not** a requirement to preserve `backend/`, FastAPI, Uvicorn or the WebSocket interface. The recorder's few dependencies on helpers in `backend/visualiser.py` were migrated to `recorder/model_access.py` in Cleanup 2; Cleanup 3 removed the backend entirely.
 
 The project already contains working PyTorch training code, data-loading utilities, and the MNIST dataset in the `training/` directory.
 
@@ -193,7 +193,12 @@ neural-network-visualiser/
 └── README.md
 ```
 
-The filenames inside `training/` are illustrative. As implemented, the files are `training/training.py` (model, loss, optimiser and `train_step()`), `training/load_data.py`, `backend/server.py`, `backend/trainer.py`, `backend/visualiser.py`, the four Live Training frontend files, and `tests/test_milestone2.py` … `tests/test_milestone4.py`. All of these except `training/` are historical; Section 2.2 lists the final layout.
+The filenames inside `training/` are illustrative. The final files are
+`training/training.py` (model, loss, optimiser and `train_step()`) and
+`training/load_data.py`. The live files (`backend/server.py`,
+`backend/trainer.py`, `backend/visualiser.py`, the Live Training frontend files)
+and `tests/test_milestone2.py` … `tests/test_milestone4.py` were removed in
+Cleanup 3; Section 2.2 lists the final layout.
 
 Use FastAPI/WebSocket if compatible with the existing project; keeping the backend simple is more important than introducing a framework unnecessarily.
 
@@ -269,8 +274,8 @@ As implemented, the server message types are `model_info`, `inference`, `trainin
 ### 5.4 Relationship to the offline pipeline — transition to the final architecture
 
 - The live backend is **not** part of the published replay site; Milestone 5C never deploys `backend/`.
-- The recorder (5A) currently reuses model-loading and serialisation helpers from `backend/visualiser.py` rather than duplicating the model or the selection rule. Cleanup 2 moves the helpers it needs to `recorder/model_access.py` so the recorder no longer imports the `backend` package.
-- **Superseded requirement:** earlier revisions required `./venv/bin/python -m backend.server` to keep serving the live mode and `tests/test_milestone2.py`, `tests/test_milestone3.py` and `tests/test_milestone4.py` to keep passing. That requirement is retired. Those tests are retired in Cleanup 3.
+- The recorder (5A) reused model-loading and serialisation helpers from `backend/visualiser.py` rather than duplicating the model or the selection rule. Cleanup 2 moved the helpers it needs to `recorder/model_access.py`, so the recorder no longer imports the `backend` package.
+- **Superseded requirement:** earlier revisions required `./venv/bin/python -m backend.server` to keep serving the live mode and `tests/test_milestone2.py`, `tests/test_milestone3.py` and `tests/test_milestone4.py` to keep passing. That requirement is retired. Those tests were retired in Cleanup 3.
 
 ## 6. Frontend design (the final replay frontend retains these requirements; the live wiring is retired)
 
@@ -315,8 +320,8 @@ Training happens exactly once per recording. Viewing the recorded run never invo
 
 ### 7.2 Recorder responsibilities (5A, completed)
 
-- A standalone program in the project virtualenv, for example `./venv/bin/python -m recorder.record_training --output recordings/mnist-epoch1`. The argument name and exact path are settled at the start of 5A; the recorder must be runnable without starting the web server.
-- Imports the existing implementation through the shared model-access helpers and uses that module's `layer1`, `layer2`, `layer3`, `loss_fn`, `optimiser`, `train_loader`, `train_data`, `batch_size` and `train_step()`. No second model, no copied forward/backward pass, no changed hyperparameters. Cleanup 2 moves those helpers from `backend/visualiser.py` to `recorder/model_access.py`; the behaviour and signatures must not change.
+- A standalone program in the project virtualenv, for example `./venv/bin/python -m recorder.record_training --output recordings/full-run`. The argument name and exact path are settled at the start of 5A; the recorder must be runnable without starting the web server.
+- Imports the existing implementation through the shared model-access helpers and uses that module's `layer1`, `layer2`, `layer3`, `loss_fn`, `optimiser`, `train_loader`, `train_data`, `batch_size` and `train_step()`. No second model, no copied forward/backward pass, no changed hyperparameters. Cleanup 2 moved those helpers from `backend/visualiser.py` to `recorder/model_access.py`; their behaviour and signatures did not change.
 - Drives the loop itself with `train_loader` + `train_step()` rather than calling `train()`, because `train()` writes `training/weights/mnist_mlp.pth` and offers no observation hooks. This keeps every artefact out of `training/`.
 - Calls `select_partial_indices(module)` **once**, before the first optimiser step, on the initial weights. That exact selection (640 + 320 + 50 = 1,010 indices) is written once and used for every checkpoint. It is never recomputed during or after training.
 - Records Step 0 before any optimiser step: the initial full weights, the initial values of the 1,010 selected connections, and no sample data.
@@ -325,7 +330,7 @@ Training happens exactly once per recording. Viewing the recorded run never invo
 - Prints progress (`step / total`, current loss) at a sensible interval, then the final step count, elapsed time, checkpoint count and output size, so a multi-minute CPU run is observable.
 - Writes only complete recordings. A crashed or interrupted run is invalid and must be regenerated; resumability is not part of 5A.
 - Reads tensors under `torch.no_grad()` / `.detach().cpu()` and writes raw little-endian bytes. It must not keep computation graphs alive.
-- Does not write into `training/`, `frontend/` or `docs/`, and does not import `backend/server.py`.
+- Does not write into `training/`, `frontend/` or `docs/`, and imports nothing from the retired backend.
 
 ### 7.3 Capture convention: pre-update versus post-update
 
@@ -338,7 +343,7 @@ Each checkpoint describes the completed optimiser step `k`:
 | Activations A1, A2 and the output layer | the same forward pass — **pre-update** |
 | The 1,010 Partial weights | after `optimiser.step()` of step `k` — **post-update** |
 
-- This is exactly the convention the approved Milestone 4 live frame uses in `backend/visualiser.py` (`build_training_step`), so live and replay describe a step identically.
+- This matches the convention of the approved, now retired Milestone 4 live frame in `backend/visualiser.py` (`build_training_step`), so the recorded bytes describe a step exactly as the live frame did.
 - Field names, the manifest, the page caption and the tests must all state the convention. Do not label a pre-update prediction as the result of the displayed weights.
 - Step 0 is different: it is the initial model before any optimiser step. Its record carries the initial Partial weights and is flagged as having no sample, prediction, activations or loss.
 
@@ -520,7 +525,7 @@ The recorded predictions and activations must be clearly identified as pre-updat
 
 Implementation notes agreed here (details in Sections 7.2–7.6):
 
-- The recorder lives in a new `recorder/` area (for example `recorder/record_training.py`) and runs from the project virtualenv. It reuses `backend/visualiser.py` helpers and `training/training.py`'s `train_step()`; it does not import the FastAPI app and does not write into `training/`.
+- The recorder lives in a new `recorder/` area (for example `recorder/record_training.py`) and runs from the project virtualenv. It reuses the model-access helpers now in `recorder/model_access.py` (moved from `backend/visualiser.py` in Cleanup 2) and `training/training.py`'s `train_step()`; it imports nothing from the retired FastAPI app and does not write into `training/`.
 - Recordings are written to a configurable output directory (for example `recordings/<run-name>/`), which is added to `.gitignore`.
 - The fixed Partial indices are written once, and every checkpoint stores only the 1,010 current values at those indices.
 - A short "how to record" section is added to `README.md` in this milestone.
@@ -567,7 +572,7 @@ Implementation notes agreed here (details in Sections 7.7 and 6.1):
 - Full mode draws all 109,184 initial connections once and keeps them visually static while the timeline moves; Partial mode updates only the fixed 1,010 recorded weights.
 - Colours follow the fixed ±0.5 scale in both modes with the light theme and existing legends.
 - The replay page opens no WebSocket and makes no request outside the published data files; failures are surfaced to the user.
-- Live mode still works (`./venv/bin/python -m backend.server`) and the Milestone 2–4 tests still pass.
+- **Superseded by Cleanup 3:** Live mode no longer exists (`./venv/bin/python -m backend.server` was removed), and the Milestone 2–4 tests were retired. This clause is historical.
 - Automated checks are added (for example `tests/test_milestone5b.py`) covering manifest and chunk consistency, record decoding, the fixed indices, absence of WebSocket usage in the replay path and relative asset references. Browser behaviour is verified manually and reported.
 
 ### Milestone 5C — GitHub Pages Deployment (completed)
@@ -593,16 +598,16 @@ Deployment design is in Section 9.
 - No dataset, virtualenv, raw recordings, tests, backend code or caches are present under `docs/`.
 - The manifest and chunk files in `docs/` match the recording exactly (counts and checksums verified by the build step).
 - The published URL passes the 5B acceptance checks with no local Python running.
-- `README.md` documents recording, building `docs/`, publishing via GitHub Pages (`main` → `/docs`) and re-running the live mode locally.
+- `README.md` documented recording, building `docs/`, publishing via GitHub Pages (`main` → `/docs`) and re-running the live mode locally. This was the 5C state; Cleanup 4 refreshed the README for the final offline-only architecture.
 - No commit or push is made without explicit user approval.
 
-**Historical note.** These 5C criteria were met when the live mode still existed. The clause about re-running the live mode locally is superseded: the live mode is retired, and Cleanup 3 removes its code and documentation.
+**Historical note.** These 5C criteria were met when the live mode still existed. The clause about re-running the live mode locally is superseded: the live mode is retired, and Cleanup 3 removed its code and documentation.
 
 ### Project Cleanup phase — overview
 
 The cleanup phase makes the repository match the final architecture in Section 2.2. It changes packaging only: no training mathematics, no recording bytes, no replay behaviour and no published-site behaviour may change. The order is mandatory — the recorder must stop importing `backend` (Cleanup 2) before `backend` can be removed (Cleanup 3).
 
-### Cleanup 1 — Project Plan Update (current milestone, documentation only)
+### Cleanup 1 — Project Plan Update (completed, documentation only)
 
 Goal: record the approved final architecture and the cleanup roadmap before any file is moved or deleted.
 
@@ -625,7 +630,7 @@ Acceptance criteria:
 - Every recording and replay requirement remains in force: the 6,001 checkpoints, the fixed 1,010 Partial connections, the ±0.5 colour scale, playback controls, chunk prefetching and the GitHub Pages deployment.
 - Cleanup 2–4 are documented with their verification steps.
 
-### Cleanup 2 — Shared Helper Migration (planned)
+### Cleanup 2 — Shared Helper Migration (completed)
 
 Goal: let the recorder stop importing the `backend` package without changing a single recorded byte.
 
@@ -640,7 +645,7 @@ Requirements:
 3. Do not change the binary recording format or any recorded manifest text: format name/version, record size 5,688 bytes, field offsets, dtypes, chunk naming and the manifest prose stay exactly as they are in this milestone.
 4. Update `recorder/record_training.py` to import from `recorder.model_access` and remove every `backend` import. The recorder must not import `backend.server`, FastAPI or Uvicorn.
 5. Update `tests/test_milestone5a.py` (and any other test importing the migrated names) to use `recorder.model_access`.
-6. Leave the rest of `backend/` untouched; it is removed in Cleanup 3.
+6. Leave the rest of `backend/` untouched; it was removed in Cleanup 3.
 
 Verification:
 
@@ -659,7 +664,7 @@ Acceptance criteria:
 - The training algorithm, the binary format and the recorded manifest prose are unchanged.
 - No new dependency is added.
 
-### Cleanup 3 — Legacy Removal (planned)
+### Cleanup 3 — Legacy Removal (completed)
 
 Goal: delete the retired Live Training application once the recorder no longer needs it.
 
@@ -691,7 +696,7 @@ Acceptance criteria:
 - No functionality required by the recorder or the replay was removed.
 - The existing recording is unchanged and still valid.
 
-### Cleanup 4 — Final Verification (planned)
+### Cleanup 4 — Final Verification (verification complete — awaiting user approval)
 
 Goal: prove the cleaned project is the documented final architecture.
 
@@ -756,7 +761,7 @@ docs/
 ### 9.3 Build process
 
 - A small build script (for example `scripts/build_pages.py`, run with the project virtualenv) copies the frontend files and one chosen recording into `docs/`, and verifies record counts, byte sizes and checksums against the manifest.
-- The script refuses to copy the MNIST dataset, `venv/`, `recordings/` sources, `tests/`, `recorder/`, `__pycache__/`, editor metadata and Git files. The `backend/` exclusion stays as a safeguard even after Cleanup 3 removes the package.
+- The script refuses to copy the MNIST dataset, `venv/`, `recordings/` sources, `tests/`, `recorder/`, `__pycache__/`, editor metadata and Git files. The `backend/` exclusion stays as a safeguard after Cleanup 3 removed the package.
 - The published `docs/` content is committed, so no build step runs in the browser and no Python is needed by visitors.
 - Rebuilding for a new recording replaces the data files in place and must leave the manifest and chunks consistent. The build fails loudly rather than publishing a mismatched recording.
 
@@ -767,7 +772,7 @@ docs/
 | `training/data/` (raw/processed MNIST) | Large, and only needed to record or train locally |
 | `venv/` | Machine-specific Python environment |
 | `recordings/` | Local recorder output; only the published copy under `docs/data/` ships |
-| `backend/` (until Cleanup 3), `tests/`, `recorder/` | Not required by a static site |
+| `backend/` (removed in Cleanup 3), `tests/`, `recorder/` | Not required by a static site |
 | `__pycache__/`, `*.py[cod]`, `*:Zone.Identifier` | Caches and platform noise |
 | `.git/`, editor configuration | Never published |
 
@@ -782,7 +787,7 @@ docs/
 ### 9.6 Verification
 
 - Serve the repository root with a plain static server (for example `./venv/bin/python -m http.server 8100`) and open `http://localhost:8100/docs/` — a subpath, like a project Pages URL.
-- Confirm the page loads with the backend stopped, opens no WebSocket, and requests nothing outside `docs/`.
+- Confirm the page loads with no Python server running, opens no WebSocket, and requests nothing outside `docs/`.
 - Confirm timeline seeking, Play/Pause/Previous/Next, speed, Full-mode static colours, Partial-mode updates and the ±0.5 colour scale.
 - Confirm a cold reload and a cached reload both work, and that a deliberately missing chunk produces a clear error instead of a wrong frame.
 - Confirm the recorder still produces a valid recording and that the remaining tests pass. The earlier requirement that `./venv/bin/python -m backend.server` and the Milestone 2–4 tests keep working is retired (Section 2.1).
@@ -810,14 +815,14 @@ The live-mode rows are retained as historical risk records. Only the replay rows
 
 ## 11. Plan evolution: live streaming versus offline replay
 
-- Milestones 1–4 implemented the original Plan A (live WebSocket streaming) and were approved. That mode is now retired; its code is removed in Cleanup 3.
+- Milestones 1–4 implemented the original Plan A (live WebSocket streaming) and were approved. That mode is now retired; its code was removed in Cleanup 3.
 - Plan B (record first, replay later) was originally the fallback. It became the chosen architecture for the published visualiser, because replaying removes the browser/server coupling, makes every displayed frame reproducible and freely seekable, and allows free static hosting. It is now the only supported application.
 - Consequences of the change:
   - the replay timeline has 6,001 checkpoints (every 10 optimiser steps), not one frame per training sample;
   - full-network weights are recorded only at Step 0, so Full mode is intentionally static;
   - the shown prediction/activations always come from the step's forward pass, while the Partial weights are that step's post-update state;
   - changing the model, the data pipeline or the cadence requires a new recording; the manifest and checksums make mismatches detectable.
-- The cleanup phase completes the transition: Cleanup 1 records it, Cleanup 2 removes the recorder's dependency on `backend/`, Cleanup 3 deletes the live mode and its documentation, and Cleanup 4 verifies the final project.
+- The cleanup phase completed the transition: Cleanup 1 recorded it, Cleanup 2 removed the recorder's dependency on `backend/`, Cleanup 3 deleted the live mode and its documentation, and Cleanup 4 verified the final project.
 
 ## 12. Out of scope for the current version
 
@@ -845,10 +850,10 @@ A visitor can open the GitHub Pages URL on a machine with no Python installed, s
 
 This was completed when the user approved Milestones 5A, 5B and 5C in order; the site is deployed on GitHub Pages and the cleanup phase must not change it.
 
-### 13.3 Final supported project (after Cleanup 4)
+### 13.3 Final supported project (Cleanup 4 — awaiting approval)
 
 The repository contains only the final architecture in Section 2.2. A developer can install `torch`, `torchvision` and `numpy` from `requirements.txt`, run the recorder to produce a recording, replay it from `frontend/replay.html` or the published `docs/` URL, and rebuild and publish `docs/` with `scripts/build_pages.py` — with no FastAPI, Uvicorn or WebSocket dependency anywhere.
 
 The existing 6,001 checkpoints, the fixed 1,010 Partial connections, the ±0.5 colour scale, the playback behaviour and the published GitHub Pages site are unchanged from the approved 5C state.
 
-This is complete only when the user explicitly approves Cleanup 2, Cleanup 3 and Cleanup 4 in order.
+Cleanup 2 and Cleanup 3 are approved. This final state is complete when the user explicitly approves Cleanup 4.

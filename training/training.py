@@ -90,7 +90,7 @@ def train():
     }, WEIGHTS_DIR / "mnist_mlp.pth")
 
 
-# Only start training when this file is run directly. The backend imports this
+# Only start training when this file is run directly. The recorder imports this
 # module to read the network above (layer1..layer3); importing it must never
 # start a training run.
 if __name__ == "__main__":
