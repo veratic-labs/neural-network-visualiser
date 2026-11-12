@@ -6,15 +6,15 @@ Run it from the repository root with the project virtualenv:
 
 The network, the dataset, the loss function, the optimiser, the DataLoader and
 the optimiser update all come from ``training/training.py``, imported through
-``backend.visualiser.load_training_module()``. This module only decides *when* to
-look at the network and *how* to write what it sees: it never builds a second
-model, never re-implements the forward/backward pass, never changes a
+``recorder.model_access.load_training_module()``. This module only decides
+*when* to look at the network and *how* to write what it sees: it never builds a
+second model, never re-implements the forward/backward pass, never changes a
 hyperparameter and never calls ``train()`` (which would write weights into
-``training/``). It also never imports ``backend/server.py`` and never binds a
-port.
+``training/``). It imports nothing from the retired ``backend`` package and
+never binds a port.
 
 Capture convention (plan.md section 7.3), identical to the live Milestone 4
-frame in ``backend/visualiser.py``:
+frame that ``backend/visualiser.py`` produced before the helpers moved here:
 
 * the image, true label, predicted digit, softmax probabilities, loss and
   activations of checkpoint ``k`` are read from the forward pass of step ``k``,
@@ -64,9 +64,10 @@ from typing import Callable, Sequence
 import numpy as np
 import torch
 
-from backend.visualiser import (
+from recorder.model_access import (
     PARTIAL_TOP_K,
     describe_architecture,
+    encode_pixels,
     linear_layers,
     load_training_module,
     select_partial_indices,
@@ -181,21 +182,19 @@ def _float32_bytes(values: np.ndarray) -> bytes:
 def image_pixels(image: torch.Tensor) -> np.ndarray:
     """A ``ToTensor()`` 28 x 28 image as the uint8 bytes the dataset stores.
 
-    ``encode_pixels()`` is the helper the live backend sends to the browser; it
-    multiplies the 0..1 tensor back by 255 and rounds, so replay and live mode
-    describe a pixel identically.
+    ``encode_pixels()`` multiplies the 0..1 tensor back by 255 and rounds, which
+    restores exactly the pixels ``ToTensor()`` divided, so a recorded image is
+    the dataset's own bytes.
     """
-    from backend.visualiser import encode_pixels
-
     return np.frombuffer(base64.b64decode(encode_pixels(image)), dtype=np.uint8)
 
 
 def partial_weight_values(module: ModuleType, selection: Sequence[np.ndarray]) -> np.ndarray:
     """The current weights of the fixed Partial connections, layer-major.
 
-    ``visible_weight_layers()`` is what a live training frame sends, so the
-    recording stores exactly the values (and the order) the browser already
-    draws. The indices come from ``selection`` and are never recomputed.
+    ``visible_weight_layers()`` returns them in the same order (and with the
+    same indices) for every checkpoint, because the indices come from
+    ``selection`` and are never recomputed.
     """
     arrays = [
         np.frombuffer(base64.b64decode(layer["values"]), dtype="<f4")

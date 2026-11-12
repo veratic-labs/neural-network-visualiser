@@ -19,8 +19,9 @@ Checks, in order:
      pre-update forward pass while the Partial weights are the post-update
      parameters
   6. the final step is recorded even when it is not a multiple of the cadence
-  7. no file in training/ changes, and the training maths is untouched
-  8. recordings/ is ignored by Git and README.md documents how to record
+  7. no file in training/ changes, the training maths is untouched, no module in
+     recorder/ imports backend/, and recordings/ is ignored by Git while
+     README.md documents how to record
 
 A short 100-step run is used; plan.md records the full 60,000-step run as a
 manual verification because it takes minutes.
@@ -309,7 +310,7 @@ def check_records(recording: Recording) -> None:
 
 def flat_parameters(module) -> tuple[np.ndarray, np.ndarray]:
     """The live model's weights and biases as flat little-endian float32 arrays."""
-    from backend.visualiser import linear_layers
+    from recorder.model_access import linear_layers
 
     layers = linear_layers(module)
     weights = np.concatenate([np.ascontiguousarray(layer.weight.detach().cpu().numpy(), dtype="<f4").reshape(-1) for layer in layers])
@@ -352,7 +353,12 @@ def forward_from_weights(weights: np.ndarray, pixels: np.ndarray) -> np.ndarray:
 
 def check_against_pytorch(recording: Recording) -> None:
     """Re-record with the same seed and compare every value with PyTorch's own."""
-    from backend.visualiser import load_training_module, linear_layers, select_partial_indices, weights_checksum
+    from recorder.model_access import (
+        linear_layers,
+        load_training_module,
+        select_partial_indices,
+        weights_checksum,
+    )
 
     from recorder import record_training
 
@@ -485,6 +491,17 @@ def check_output_guards() -> None:
 def check_source() -> None:
     source = (REPO_ROOT / "recorder" / "record_training.py").read_text(encoding="utf-8")
     check(not any(name in source for name in ("backend.server", "FastAPI", "uvicorn")), "the recorder never imports the server")
+
+    backend_imports = [
+        f"{path.name}: {match.group(0).strip()}"
+        for path in sorted((REPO_ROOT / "recorder").glob("*.py"))
+        for match in re.finditer(
+            r"^\s*(?:from|import)\s+backend\b.*$",
+            path.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    ]
+    check(not backend_imports, "no module in recorder/ imports backend/", backend_imports)
     check("train_step" in source and "load_training_module" in source, "the recorder reuses training/training.py's train_step()")
     check("nn.Linear" in source, "the recorder refers to the existing nn.Linear layers")
     constructs = re.search(r"(nn\.Linear|nn\.CrossEntropyLoss|torch\.optim\.Adam)\s*\(", source)
